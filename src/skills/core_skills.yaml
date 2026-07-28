@@ -1,0 +1,38 @@
+# MustanAgent v3.3 PRO - Çekirdek Yetenekler (Core Skills)
+# Bu dosya ajanın hangi komutları anlayabildiğini LLM'e tarif eder.
+skills:
+  - name: "scan"
+    command: "/scan"
+    description: "Projeyi tarar, klasörleri okur ve Zihin Haritası oluşturur."
+
+  - name: "plan"
+    command: "/plan"
+    description: "Sıfırdan genel bir yol haritası çıkarır, projeyi planlar."
+
+  - name: "coder"
+    command: "/coder <wp-id>"
+    description: "Bir iş paketini baştan sona kodlar, dosyaları oluşturur ve düzenler."
+
+  - name: "run"
+    command: "/run <dosya_yolu>"
+    description: "Belirtilen bir Python kod dosyasını güvenli ortamda çalıştırır, hatalarını analiz eder."
+
+  - name: "scope"
+    command: "/scope"
+    description: "Proje kurallarını belirler ve mühürler."
+
+  - name: "ide"
+    command: "/ide start"
+    description: "VS Code veya JetBrains editörleriyle haberleşmek için MustanBridge'i başlatır."
+
+  - name: "operate"
+    command: "/operate"
+    description: "Klavye, fare ve ekranı kullanarak otonom işlemler yapar."
+
+  - name: "reflect"
+    command: "/reflect"
+    description: "Geçmiş logları analiz edip proje kuralları ve deneyim raporu çıkarır."
+
+
+
+

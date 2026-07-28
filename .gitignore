@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.env
+*.env
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Proje özel – aktarmak istemediklerin
+Aimemory/
+test_memory/
+test_mem/
+.pytest_cache/
+*.m4a
+*.png
+MustanAgent_PRO_da_Dinamik_DAG_ve_RAG.m4a
+NotebookLM Mind Map.png
+"Yeni Metin Belgesi.txt"
+"test adımları.txt"
+"tarihe notlar.txt"
+
+# Secrets / local
+mustan_settings.json
+*.key
+.secrets.baseline

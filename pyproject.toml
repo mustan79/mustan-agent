@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mustan-agent"
+version = "3.3.0"
+description = "MustanAgent v3.3 PRO - Otonom Yazılım Geliştirme ve Mimari Asistanı"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Mustafa Tan", email = "mustan79@gmail.com"}
+]
+keywords = ["ai", "autonomous", "agent", "coding", "cli", "harness-engineering"]
+dependencies = [
+    "google-genai>=0.1.0",
+    "openai>=1.0.0",
+    "pydantic>=2.0.0",
+    "keyring>=24.0.0",
+    "playwright>=1.40.0",
+    "SpeechRecognition>=3.10.0",
+    "PyAudio>=0.2.14",
+    "PyYAML>=6.0",
+    "websockets>=12.0",
+    "pyautogui>=0.9.54",
+    "Pillow>=10.0.0",
+    "keyboard>=0.13.5",
+    "pyttsx3>=2.90"
+]
+
+# Geliştirici (Dev) ve Test araçları
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0"
+]
+
+[project.urls]
+Homepage = "https://github.com/mustan/mustan-agent"
+Documentation = "https://github.com/mustan/mustan-agent/README.md"
+
+[project.scripts]
+mustan-agent = "main:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+

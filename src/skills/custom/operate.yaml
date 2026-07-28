@@ -1,0 +1,37 @@
+# MustanAgent - Operate Skill
+name: operate
+description: >
+  Verilen doğal dil görevini otonom olarak yerine getirir.
+  Thought → Tool Call → Observation döngüsü kullanır.
+  Dosya okuma/yazma, bash, smart_edit ve test çalıştırma yeteneğine sahiptir.
+
+triggers:
+  - "/operate"
+  - "operate"
+  - "otonom çalış"
+  - "görevi yap"
+  - "şunu gerçekleştir"
+
+parameters:
+  - name: task
+    type: string
+    required: true
+    description: Yapılacak işin doğal dil açıklaması
+
+examples:
+  - command: "/operate src/utils altına date_helper.py ekle"
+    description: Yeni yardımcı modül oluşturur
+  - command: "/operate mevcut login fonksiyonuna rate-limit ekle"
+    description: Var olan kodu güvenli şekilde günceller
+
+system_hint: |
+  Bu skill AgentRuntime üzerinden çalışır.
+  Her adımda <thought> zorunludur.
+  max_steps: 12
+  preferred_tools: [bash, smart_edit, read_file, write_file]
+
+tags:
+  - autonomous
+  - coding
+  - runtime
+
