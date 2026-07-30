@@ -22,16 +22,16 @@ class LLMSettings(BaseModel):
         default="gemini",
         description="gemini | openai | openrouter | ollama | ollama_cloud",
     )
-    model: str = Field(default="gemini-1.5-pro")
+    model: str = Field(default="gemini-2.5-flash-lite")
     temperature: float = Field(default=0.3, ge=0.0, le=2.0)
     daily_budget_usd: float = Field(default=5.0, ge=0.0)
 
     # Ollama / Ollama Cloud özel
     ollama_base_url: str = Field(
-        default="https://ollama.com/api",
+        default="https://ollama.com/v1",
         description="Ollama Cloud veya self-hosted OpenAI-compatible endpoint",
     )
-    ollama_model: str = Field(default="llama3.1")
+#    ollama_model: str = Field(default="gemma-4-31b-it")
 
 
 class MemorySettings(BaseModel):

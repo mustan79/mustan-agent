@@ -229,18 +229,20 @@ class AgentRuntime:
                 )
 
             if parsed.final_answer:
+                # Eğer bu adımda tool çağrısı yoksa ve görev “yap / oluştur / yaz / aç” gibi eylem içeriyorsa reddet
+                action_verbs = ("oluştur", "yaz", "sil", "düzenle", "aç", "oku", "create", "write", "edit", "delete")
+                needs_tool = any(v in initial_prompt.lower() for v in action_verbs)
+                if needs_tool and not parsed.tool_calls and step == 1:
+                    reject = (
+                        "Sistem reddi: Eylem gerektiren görevde tool çağırmadan <final> veremezsin.\n"
+                        "Önce ilgili aracı kullan (write_file, bash, read_file, smart_edit), "
+                        "sonucu gör, sonra <final> ver."
+                    )
+                    conversation += f"\n\n[ASSISTANT]\n{response}\n\n[SYSTEM]\n{reject}\n"
+                    continue
                 print(f"✅ Final: {parsed.final_answer[:400]}")
                 final_result = parsed.final_answer
                 break
-
-            if not parsed.tool_calls:
-                warn = (
-                    "Ne tool çağrısı ne de <final> bloğu var. "
-                    "Ya bir araç kullan ya da görevi <final> ile bitir."
-                )
-                print(f"[!] {warn}")
-                conversation += f"\n\n[ASSISTANT]\n{response}\n\n[SYSTEM]\n{warn}\n"
-                continue
 
             observations = []
             for call in parsed.tool_calls:

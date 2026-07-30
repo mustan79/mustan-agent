@@ -17,6 +17,7 @@ from core.config import settings
 from core.vault import MustanVault
 from core.cost_tracker import get_cost_tracker, CostTracker
 from memory.rag_buffer import get_rag_buffer, RAGBuffer
+from core.telemetry import track_llm, get_telemetry
 
 logger = logging.getLogger("mustan_agent.core.query_engine")
 
@@ -51,23 +52,18 @@ class LLMClient:
         if value:
             return value
         try:
-            return self.vault.get_key(key_name)
+            return self.vault.get_secret(key_name)
         except Exception:
             return None
 
     def _get_active_model_and_provider(self) -> Tuple[str, str]:
         try:
             llm_cfg = settings.config.llm
-            provider = (llm_cfg.provider or "gemini").lower()
+            provider = (llm_cfg.provider).lower()
             model = llm_cfg.model
         except Exception:
-            provider, model = "gemini", "gemini-1.5-pro"
+            provider, model = "gemini", "gemini-2.5-flash-lite"
 
-        if not model:
-            if provider in ("ollama", "ollama_cloud"):
-                model = getattr(settings.config.llm, "ollama_model", "llama3.1")
-            else:
-                model = os.environ.get("MUSTAN_MODEL") or "gemini-1.5-pro"
         return provider, model
 
     def _get_rag(self, memory_dir: Optional[str] = None) -> RAGBuffer:
@@ -145,6 +141,7 @@ class LLMClient:
         temperature: float = 0.3,
         base_url: Optional[str] = None,
         api_key_name: str = "OPENAI_API_KEY",
+        extra_headers: Optional[Dict[str, str]] = None,
     ) -> Tuple[str, int, int]:
         try:
             from openai import OpenAI
@@ -152,12 +149,25 @@ class LLMClient:
             raise RuntimeError("openai paketi yüklü değil") from e
 
         api_key = self._get_env_or_vault(api_key_name)
-        if not api_key and provider in ("ollama", "ollama_cloud"):
-            api_key = "ollama"
-        if not api_key:
-            raise RuntimeError(f"{api_key_name} bulunamadı (Vault veya ortam değişkeni)")
 
-        client = OpenAI(api_key=api_key, base_url=base_url)
+        # Local ollama için key zorunlu değil
+        if not api_key:
+            if provider in ("ollama",):
+                api_key = "ollama"
+            else:
+                raise RuntimeError(
+                    f"{api_key_name} bulunamadı (Vault veya ortam değişkeni). "
+                    f"/set key {api_key_name} <değer> ile ekle."
+                )
+
+        client_kwargs: Dict[str, Any] = {
+            "api_key": api_key,
+            "base_url": base_url,
+        }
+        if extra_headers:
+            client_kwargs["default_headers"] = extra_headers
+
+        client = OpenAI(**client_kwargs)
 
         messages = []
         if system_prompt:
@@ -209,8 +219,10 @@ class LLMClient:
         memory_dir: Optional[str] = None,
         temperature: float = 0.3,
         max_retries: int = 3,
+        caller: str = "llm.generate_with_stats",
     ) -> Tuple[str, Dict[str, Any]]:
         provider, model = self._get_active_model_and_provider()
+        mem = memory_dir or "Aimemory"
 
         final_prompt = prompt
         if use_rag:
@@ -242,15 +254,34 @@ class LLMClient:
                     text, in_tok, out_tok = self._call_gemini(
                         final_prompt, system_prompt, model, temperature, images
                     )
-                elif provider in ("ollama", "ollama_cloud"):
+
+                elif provider == "ollama":
+                    # Yerel Ollama
                     try:
-                        base_url = settings.config.llm.ollama_base_url
+                        base_url = settings.config.llm.ollama_base_url or "http://localhost:11434"
                     except Exception:
-                        base_url = "https://ollama.com/api"
-                    if not base_url.rstrip("/").endswith("/v1"):
-                        base_url = base_url.rstrip("/") + "/v1"
+                        base_url = "http://localhost:11434"
+                    base_url = base_url.rstrip("/")
+                    if not base_url.endswith("/v1"):
+                        base_url = base_url + "/v1"
                     text, in_tok, out_tok = self._call_openai_compatible(
-                        provider=provider,
+                        provider="ollama",
+                        prompt=final_prompt,
+                        system_prompt=system_prompt,
+                        model=model,
+                        temperature=temperature,
+                        base_url=base_url,
+                        api_key_name="OLLAMA_API_KEY",  # yoksa "ollama" kullanılır
+                    )
+
+                elif provider == "ollama_cloud":
+                    # Ollama Cloud – doğru OpenAI-uyumlu endpoint
+                    try:
+                        base_url = getattr(settings.config.llm, "ollama_base_url", None)
+                    except Exception:
+                        base_url = "https://ollama.com/v1"
+                    text, in_tok, out_tok = self._call_openai_compatible(
+                        provider="ollama_cloud",
                         prompt=final_prompt,
                         system_prompt=system_prompt,
                         model=model,
@@ -258,6 +289,7 @@ class LLMClient:
                         base_url=base_url,
                         api_key_name="OLLAMA_API_KEY",
                     )
+
                 elif provider == "openrouter":
                     text, in_tok, out_tok = self._call_openai_compatible(
                         provider="openrouter",
@@ -267,7 +299,12 @@ class LLMClient:
                         temperature=temperature,
                         base_url="https://openrouter.ai/api/v1",
                         api_key_name="OPENROUTER_API_KEY",
+                        extra_headers={
+                            "HTTP-Referer": "https://github.com/mustan79/mustan-agent",
+                            "X-Title": "MustanAgent",
+                        },
                     )
+
                 else:  # openai
                     text, in_tok, out_tok = self._call_openai_compatible(
                         provider="openai",
@@ -311,7 +348,6 @@ class LLMClient:
         raise RuntimeError(
             f"LLM çağrısı {max_retries} denemeden sonra başarısız: {last_error}"
         ) from last_error
-
 
 class QueryEngine:
     def __init__(

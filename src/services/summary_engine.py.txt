@@ -1,0 +1,213 @@
+"""
+MustanAgent v3.3+ - Summary Engine
+DAG durumu + session + telemetry birleşik ilerleme özeti.
+Varsayılan: LLM kullanmaz. İsteğe bağlı kısa LLM narratif.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from memory.dag_manager import DAGManager
+from models.datatypes import WPStatus
+
+logger = logging.getLogger("mustan_agent.services.summary_engine")
+
+
+class SummaryEngine:
+    def __init__(self, memory_dir: str = "Aimemory"):
+        self.memory_dir = Path(memory_dir)
+        self.dag = DAGManager(memory_dir)
+
+    # ------------------------------------------------------------------
+    # Veri toplama
+    # ------------------------------------------------------------------
+
+    def _load_session(self) -> Dict[str, Any]:
+        path = self.memory_dir / "session_state.json"
+        if not path.exists():
+            # alternatif konumlar
+            for alt in (
+                self.memory_dir / "session.json",
+                self.memory_dir / "state.json",
+            ):
+                if alt.exists():
+                    path = alt
+                    break
+            else:
+                return {}
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.debug("session okunamadı: %s", e)
+            return {}
+
+    def _load_telemetry_summary(self) -> Dict[str, Any]:
+        try:
+            from core.telemetry import get_telemetry
+            return get_telemetry(str(self.memory_dir)).summary_today()
+        except Exception as e:
+            logger.debug("telemetry yok: %s", e)
+            return {}
+
+    def _load_cost_status(self) -> str:
+        try:
+            from core.cost_tracker import get_cost_tracker
+            return get_cost_tracker().status_report()
+        except Exception:
+            return ""
+
+    def _dag_snapshot(self) -> Dict[str, Any]:
+        if not self.dag.exists():
+            return {"exists": False, "goal": None, "summary": {}, "nodes": []}
+        plan = self.dag.load()
+        if plan is None:
+            return {"exists": False, "goal": None, "summary": {}, "nodes": []}
+
+        nodes_brief = []
+        for nid, wp in plan.nodes.items():
+            nodes_brief.append({
+                "id": wp.id,
+                "title": wp.title,
+                "status": wp.status.value,
+                "depends_on": wp.depends_on,
+                "artifacts": wp.artifacts[:5],
+                "error": (wp.error_log or "")[:120],
+            })
+
+        return {
+            "exists": True,
+            "goal": plan.goal,
+            "summary": plan.get_status_summary(),
+            "nodes": nodes_brief,
+            "ready_ids": self.dag.get_ready_ids(),
+            "updated_at": plan.updated_at.isoformat() if plan.updated_at else None,
+        }
+
+    def collect(self) -> Dict[str, Any]:
+        return {
+            "ts": datetime.now().isoformat(timespec="seconds"),
+            "dag": self._dag_snapshot(),
+            "session": self._load_session(),
+            "telemetry": self._load_telemetry_summary(),
+            "cost": self._load_cost_status(),
+        }
+
+    # ------------------------------------------------------------------
+    # Metin özet (LLM yok)
+    # ------------------------------------------------------------------
+
+    def render_text(self, data: Optional[Dict[str, Any]] = None) -> str:
+        data = data or self.collect()
+        lines: List[str] = []
+        lines.append("══════════════════════════════════════")
+        lines.append("  MustanAgent — İlerleme Özeti")
+        lines.append(f"  {data.get('ts', '')}")
+        lines.append("══════════════════════════════════════")
+
+        # DAG
+        dag = data.get("dag") or {}
+        if not dag.get("exists"):
+            lines.append("\n📋 Plan: Henüz DAG yok. /plan ile başla.")
+        else:
+            lines.append(f"\n📋 Hedef: {dag.get('goal') or '—'}")
+            if dag.get("updated_at"):
+                lines.append(f"   Güncelleme: {dag['updated_at']}")
+            summary = dag.get("summary") or {}
+            order = [
+                "done", "running", "ready", "pending",
+                "failed", "blocked", "skipped",
+            ]
+            parts = [f"{k}:{summary.get(k, 0)}" for k in order if summary.get(k, 0)]
+            lines.append("   Durum → " + " | ".join(parts) if parts else "   Durum → (boş)")
+
+            ready = dag.get("ready_ids") or []
+            if ready:
+                lines.append(f"   Hazır: {', '.join(ready)}")
+
+            # Kısa düğüm listesi
+            nodes = dag.get("nodes") or []
+            if nodes:
+                lines.append("\n   İş paketleri:")
+                for n in nodes[:12]:
+                    mark = {
+                        "done": "✅",
+                        "running": "🔄",
+                        "ready": "▶️",
+                        "pending": "⏳",
+                        "failed": "❌",
+                        "blocked": "🚫",
+                        "skipped": "⏭️",
+                    }.get(n["status"], "•")
+                    err = f" — {n['error']}" if n.get("error") and n["status"] == "failed" else ""
+                    lines.append(f"   {mark} {n['id']} {n['title']} [{n['status']}]{err}")
+                if len(nodes) > 12:
+                    lines.append(f"   … +{len(nodes) - 12} daha")
+
+        # Session
+        session = data.get("session") or {}
+        if session:
+            task = session.get("last_active_task") or session.get("active_task")
+            st = session.get("status")
+            if task or st:
+                lines.append(f"\n📌 Oturum: task={task or '—'} status={st or '—'}")
+
+        # Telemetry / maliyet
+        tel = data.get("telemetry") or {}
+        if tel.get("total_calls"):
+            lines.append(
+                f"\n📊 Bugün: {tel.get('total_calls', 0)} LLM çağrısı | "
+                f"{tel.get('total_tokens', 0)} token | "
+                f"${tel.get('total_cost_usd', 0):.4f} | "
+                f"hata={tel.get('fail_count', 0)}"
+            )
+            by = tel.get("by_caller") or {}
+            for i, (caller, v) in enumerate(by.items()):
+                if i >= 5:
+                    break
+                lines.append(
+                    f"   • {caller}: {v.get('calls', 0)}× | "
+                    f"{v.get('tokens', 0)} tok | ${v.get('cost_usd', 0):.4f}"
+                )
+
+        cost = data.get("cost") or ""
+        if cost:
+            lines.append(f"\n💰 Bütçe: {cost}")
+
+        lines.append("\n══════════════════════════════════════")
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Opsiyonel kısa LLM narratif
+    # ------------------------------------------------------------------
+
+    def render_with_narrative(self, use_llm: bool = False) -> str:
+        base = self.render_text()
+        if not use_llm:
+            return base
+        try:
+            from core.query_engine import LLMClient
+            llm = LLMClient()
+            data = self.collect()
+            prompt = (
+                "Aşağıdaki ajan durum özetini 3-5 cümlelik Türkçe ilerleme notuna çevir. "
+                "Sadece metin yaz, başlık ekleme.\n\n"
+                + base[:3000]
+            )
+            text, _ = llm.generate_with_stats(
+                prompt=prompt,
+                system_prompt="Sen kısa proje asistanısın. Abartma, net yaz.",
+                use_rag=False,
+                temperature=0.3,
+                caller="services.summary_engine",
+            )
+            return base + "\n\n📝 Not:\n" + (text or "").strip()
+        except Exception as e:
+            logger.warning("Summary narrative başarısız: %s", e)
+            return base
+
+

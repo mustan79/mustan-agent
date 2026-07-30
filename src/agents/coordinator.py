@@ -20,15 +20,18 @@ from agents.verifier import VerifierAgent
 from commands.scan import run_scan
 from commands.plan import run_plan
 from commands.deeplan import run_deeplan
-from commands.doctor import run_doctor
 from commands.operate import run_operate
-from commands.scope import run_scope
 from commands.reflect import run_reflect
 from commands.rewind import run_rewind
 from commands.btw import run_btw
 from commands.ide import run_ide
-from commands.status_summary import run_status, run_summary
 from commands.set_config import run_set
+from commands.help_cmd import run_help
+from commands.doctor import run_doctor
+from commands.status_summary import run_status
+from commands.status_summary import run_summary
+from commands.status_summary import run_telemetry_report
+from commands.scope import run_scope
 
 logger = logging.getLogger("mustan_agent.agents.coordinator")
 
@@ -119,60 +122,66 @@ class MustanCoordinator:
     def _route_command(self, cmd: str, args: str) -> bool:
         cmd = cmd.lower().strip()
         args = (args or "").strip()
+        if cmd in ("/help", "help", "/list", "list", "/komutlar"):
+            return bool(run_help(args))
 
-        if cmd in ("/scan", "scan"):
+        elif cmd in ("/doctor", "doctor"):
+            return bool(run_doctor())  # True/False — main "bilinmeyen" basmaz
+
+        elif cmd in ("/status", "status"):
+            return bool(run_status())
+
+        elif cmd in ("/summary", "summary"):
+            use_llm = "llm" in args.lower()
+            return bool(run_summary(use_llm=use_llm))
+
+        elif cmd in ("/telemetry", "telemetry"):
+            return bool(run_telemetry_report(self.memory_dir))
+
+        elif cmd in ("/scope", "scope"):
+            return bool(run_scope(rules=args, memory_dir=self.memory_dir))
+       
+        elif cmd in ("/scan", "scan"):
             target = args if args else "."
             return bool(run_scan(target_dir=target, memory_dir=self.memory_dir))
 
-        if cmd in ("/plan", "plan"):
+        elif cmd in ("/plan", "plan"):
             if not args:
                 print("[-] /plan için hedef gerekli. Örnek: /plan kullanıcı girişi ekle")
                 return True
             return bool(self.planner.execute_task(task_description=args))
 
-        if cmd in ("/deeplan", "deeplan"):
+        elif cmd in ("/deeplan", "deeplan"):
             if not args:
                 print("[-] /deeplan için WP id gerekli. Örnek: /deeplan WP-001")
                 return True
             return bool(self.planner.execute_task(task_description="", wp_id=args))
 
-        if cmd in ("/operate", "operate", "/coder", "coder"):
+        elif cmd in ("/operate", "operate", "/coder", "coder"):
             return bool(run_operate(args))
 
-        if cmd in ("/doctor", "doctor"):
-            return bool(run_doctor())
-
-        if cmd in ("/scope", "scope"):
-            return bool(run_scope(rules=args, memory_dir=self.memory_dir))
-
-        if cmd in ("/reflect", "reflect"):
+        elif cmd in ("/reflect", "reflect"):
             return bool(run_reflect())
 
-        if cmd in ("/rewind", "rewind"):
+        elif cmd in ("/rewind", "rewind"):
             return bool(run_rewind(args))
 
-        if cmd in ("/btw", "btw"):
+        elif cmd in ("/btw", "btw"):
             return bool(run_btw(args))
 
-        if cmd in ("/ide", "ide"):
+        elif cmd in ("/ide", "ide"):
             return bool(run_ide(args))
 
-        if cmd in ("/status", "status"):
-            return bool(run_status())
-
-        if cmd in ("/summary", "summary"):
-            return bool(run_summary())
-
-        if cmd in ("/set", "set"):
+        elif cmd in ("/set", "set"):
             return bool(run_set(args))
 
-        if cmd in ("/worker", "worker"):
+        elif cmd in ("/worker", "worker"):
             if not args:
                 print("[-] /worker için WP id gerekli")
                 return True
             return bool(self.worker.execute_task(wp_id=args))
 
-        if cmd in ("/verify", "verify"):
+        elif cmd in ("/verify", "verify"):
             if args.upper().startswith("WP-") or (args.isdigit()):
                 return bool(self.verifier.execute_task(wp_id=args))
             if args and ("/" in args or args.endswith(".py")):
@@ -183,15 +192,16 @@ class MustanCoordinator:
                 )
             )
 
-        if cmd in ("/voice", "voice"):
+        elif cmd in ("/voice", "voice"):
             from commands.voice import run_voice
             return bool(run_voice(args, coordinator=self))
 
-        if cmd in ("/buddy", "buddy") and self.buddy:
+        elif cmd in ("/buddy", "buddy") and self.buddy:
             from commands.buddy import run_buddy
             return bool(run_buddy(args, self.buddy))
 
-        return False
+        else:
+            return False
 
     def _handle_chat(self, user_input: str) -> str:
         system = (
