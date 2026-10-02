@@ -24,12 +24,13 @@ Tarih: 2 Ekim 2026.
 
 ## Doğrulama
 
-- Windows / Python 3.12: 63 pytest testi geçti.
+- Windows / Python 3.12: 64 pytest testi geçti.
 - Model çağrıları testlerde mock edilir; dış API kullanılmaz.
 - Gerçek dosya yazma, okuma, yeniden düzenleme, Python syntax koruması ve WebSocket bağlantısı test edildi.
 - Wheel ve sdist üretildi; twine metadata kontrolleri geçti.
 - Wheel içindeki CLI, YAML kaynakları ve bytecode içermemesi denetlendi.
-- Ayrı sanal ortamda wheel kurulumu ve kaynak dizini dışındaki CLI kontrolleri uygulanır.
+- Ayrı sanal ortamda wheel kuruldu; kaynak dizini dışında help/version/set/doctor/scan/status/summary/telemetry/scope ve hata çıkış kodları doğrulandı.
+- Gerçek CLI ve OpenAI SDK'sı, yerel sahte model sunucusuyla plan → dosya yazma → okuma → tamamlanma akışında test edildi; dış servise bağlanılmadı.
 - GitHub Actions Windows/Linux ve Python 3.10/3.12/3.13 matrisi için yapılandırıldı.
 
 ## Kalan sınırlar
