@@ -23,9 +23,8 @@ def run_scope(rules: str, memory_dir: Optional[str] = None) -> bool:
     logger.info("Scope (Proje Kuralları) mühürleme işlemi başlatılıyor...")
 
     if not rules.strip():
-        print("\n[-] Lütfen mühürlenecek kuralları belirtin.")
-        print("    Örnek: /scope Sadece Pydantic modüllerini kullan ve async yaz.")
-        return False
+        print(instructions_path.read_text(encoding="utf-8") if instructions_path.exists() else "[~] Henüz proje kuralı yok.")
+        return True
 
     try:
         # Hafıza dizinini oluştur (eğer yoksa)

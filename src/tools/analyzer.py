@@ -1,195 +1,195 @@
-### `src/tools/analyzer.py`
 import os
 import ast
-import logging
+import json
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import Dict, List, Set, Any
 
-# Loglama ayarı (Uygulama genelindeki loglayıcıyı kullanır)
-logger = logging.getLogger("mustan_agent.tools.analyzer")
-
-# Taranmayacak, LLM'in token bütçesini boşa harcamaması gereken yoksayılan dizinler
-IGNORED_DIRS = {
-    ".git", "__pycache__", "node_modules", "venv", "env", ".venv", 
-    "Aimemory", ".idea", ".vscode", "dist", "build"
-}
-
-class ASTSkeletonVisitor(ast.NodeVisitor):
-    """
-    Python dosyasının AST (Soyut Sözdizimi Ağacı) üzerinde gezinerek
-    sadece Sınıf (Class), Fonksiyon (Function) ve Import imzalarını çıkaran ziyaretçi sınıf.
-    Kodu okurken gövdeyi yutar, sadece iskeleti bırakarak LLM token bütçesini korur.
-    """
+class CodeVisitor(ast.NodeVisitor):
+    """Her bir .py dosyasının AST ağacını gezen ziyaretçi sınıfı."""
     def __init__(self):
-        self.skeleton_lines: List[str] = []
-        self.imports: List[str] = []
-        self.current_indent = 0
+        self.imports = []
+        self.classes = []
+        self.functions = []
+        self.calls = []
 
-    def add_line(self, line: str):
-        """Mevcut girinti (indent) seviyesine göre satır ekler."""
-        indentation = "    " * self.current_indent
-        self.skeleton_lines.append(f"{indentation}{line}")
-
-    def visit_Import(self, node: ast.Import):
+    def visit_Import(self, node):
         for alias in node.names:
-            self.imports.append(f"import {alias.name}")
+            self.imports.append(alias.name)
         self.generic_visit(node)
 
-    def visit_ImportFrom(self, node: ast.ImportFrom):
-        module = node.module or ""
-        names = ", ".join(alias.name for alias in node.names)
-        self.imports.append(f"from {module} import {names}")
+    def visit_ImportFrom(self, node):
+        if node.module:
+            self.imports.append(node.module)
         self.generic_visit(node)
 
-    def visit_ClassDef(self, node: ast.ClassDef):
-        # Sınıf imzasını oluştur (Miras aldığı sınıflarla birlikte)
-        bases = ", ".join(b.id for b in node.bases if isinstance(b, ast.Name))
-        bases_str = f"({bases})" if bases else ""
-        self.add_line(f"class {node.name}{bases_str}:")
-        
-        # Docstring (Açıklama) varsa ilk satırını al (LLM'e bağlam vermek için)
-        docstring = ast.get_docstring(node)
-        if docstring:
-            first_line = docstring.strip().split('\n')
-            self.add_line(f'    """{first_line}"""')
-        else:
-            self.add_line("    ...")
-            
-        # Sınıfın içindeki metotları okumak için girintiyi artır
-        self.current_indent += 1
+    def visit_ClassDef(self, node):
+        self.classes.append(node.name)
         self.generic_visit(node)
-        self.current_indent -= 1
-        self.add_line("") # Sınıf sonu boşluğu
 
-    def visit_FunctionDef(self, node: ast.FunctionDef):
-        self._handle_function(node)
-
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef):
-        self._handle_function(node, is_async=True)
-
-    def _handle_function(self, node, is_async=False):
-        # Fonksiyon parametrelerini güvenlice çıkar
-        args = []
-        for arg in node.args.args:
-            args.append(arg.arg)
-        if node.args.vararg:
-            args.append(f"*{node.args.vararg.arg}")
-        if node.args.kwarg:
-            args.append(f"**{node.args.kwarg.arg}")
-            
-        args_str = ", ".join(args)
-        prefix = "async def " if is_async else "def "
-        
-        # Dönüş tipi (Type Hint) varsa ekle
-        returns = ""
-        if node.returns and isinstance(node.returns, ast.Name):
-            returns = f" -> {node.returns.id}"
-            
-        self.add_line(f"{prefix}{node.name}({args_str}){returns}:")
-        
-        # Fonksiyonun ne yaptığını anlatan docstring'i ekle
-        docstring = ast.get_docstring(node)
-        if docstring:
-            first_line = docstring.strip().split('\n')
-            self.add_line(f'    """{first_line}"""')
-        else:
-            self.add_line("    pass")
-            
-        # İç içe fonksiyonları yakalamak için devam et
-        self.current_indent += 1
+    def visit_FunctionDef(self, node):
+        self.functions.append(node.name)
         self.generic_visit(node)
-        self.current_indent -= 1
+
+    def visit_AsyncFunctionDef(self, node):
+        self.functions.append(node.name)
+        self.generic_visit(node)
+
+    def visit_Call(self, node):
+        if isinstance(node.func, ast.Name):
+            self.calls.append(node.func.id)
+        elif isinstance(node.func, ast.Attribute):
+            self.calls.append(node.func.attr)
+        self.generic_visit(node)
 
 class ProjectAnalyzer:
-    """
-    Proje genelinde dosya okuma, AST çıkarma ve 'Zihin Haritası' (Mind Map) 
-    oluşturma işlemlerini yürüten ana araç sınıfıdır.
-    ExplorerAgent tarafından kullanılır.
-    """
+    @staticmethod
+    def extract_file_skeleton(file_path: str) -> str:
+        """Return a compact AST skeleton for prompts and quick inspection."""
+        source = Path(file_path).read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=file_path)
+        lines = []
+        for node in tree.body:
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                lines.append(ast.unparse(node))
+            elif isinstance(node, ast.ClassDef):
+                lines.append(f"class {node.name}:")
+                for child in node.body:
+                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        args = [a.arg for a in child.args.args]
+                        prefix = "async def" if isinstance(child, ast.AsyncFunctionDef) else "def"
+                        ret = f" -> {ast.unparse(child.returns)}" if child.returns else ""
+                        lines.append(f"    {prefix} {child.name}({', '.join(args)}){ret}:")
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                args = [a.arg for a in node.args.args]
+                prefix = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
+                ret = f" -> {ast.unparse(node.returns)}" if node.returns else ""
+                lines.append(f"{prefix} {node.name}({', '.join(args)}){ret}:")
+        return "\n".join(lines)
 
     @staticmethod
-    def extract_file_skeleton(file_path: str | Path) -> str:
-        """
-        Belirtilen Python dosyasının sadece sınıflarını, fonksiyonlarını ve import'larını
-        okuyarak bir iskelet çıkarır. Hatalı dosyalarda güvenli çıkış yapar.
-        """
-        path = Path(file_path)
-        if not path.exists() or not path.is_file():
-            return f"[-] Dosya bulunamadı: {path}"
-
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                source_code = f.read()
-                
-            # Boş dosyalar için erken çıkış
-            if not source_code.strip():
-                return f"### Dosya: {path.name}\n(Boş Dosya)\n"
-
-            # AST Ağacını ayrıştır
-            tree = ast.parse(source_code, filename=str(path))
-            visitor = ASTSkeletonVisitor()
-            visitor.visit(tree)
-
-            # Çıktıyı LLM'in okumayı en sevdiği Markdown formatında birleştir
-            result = [f"### Dosya: {path}"]
-            if visitor.imports:
-                result.append("**İçe Aktarmalar:**")
-                result.append("    " + ", ".join(visitor.imports[:5]) + ("..." if len(visitor.imports) > 5 else ""))
-                result.append("")
-                
-            result.append("**İskelet:**")
-            result.append("```python")
-            result.extend(visitor.skeleton_lines)
-            result.append("```")
-            result.append("-" * 40)
-            
-            return "\n".join(result)
-
-        except SyntaxError as e:
-            logger.warning(f"Syntax (Yazım) hatası nedeniyle {path.name} iskeleti çıkarılamadı: {str(e)}")
-            return f"### Dosya: {path}\n[-] Syntax Error (Kod hatalı): {str(e)}\n"
-        except Exception as e:
-            logger.error(f"Dosya analizinde beklenmeyen hata ({path}): {str(e)}")
-            return f"### Dosya: {path}\n[-] Okuma Hatası: {str(e)}\n"
-
-    @staticmethod
-    def scan_directory(target_dir: str = ".") -> str:
-        """
-        /scan komutunun kalbi: Hedef dizindeki tüm dosyaları yoksayılanları atlayarak
-        tarar ve tüm projenin 'Zihin Haritasını' (Mind Map) tek bir Markdown metni olarak döner.
-        """
-        root_path = Path(target_dir).resolve()
-        mind_map: List[str] = [f"# Proje Zihin Haritası (Dizin: {root_path.name})", ""]
+    def scan_directory(target_dir: str, memory_dir: str = "Aimemory") -> None:
+        target_path = Path(target_dir).resolve()
+       
+        # Taranmayacak, LLM'in token bütçesini boşa harcamaması gereken yoksayılan dizinler
+        ignore_dirs = {
+            ".git", "__pycache__", "node_modules", "venv", "env", ".venv", 
+            "Aimemory", ".idea", ".vscode", "dist", "build"
+        }
         
-        if not root_path.exists() or not root_path.is_dir():
-            return f"[-] Hedef dizin bulunamadı: {root_path}"
+        analysis_data = {
+            "files": {},
+            "import_graph": {},
+            "call_graph": {},
+            "unused_candidates": {
+                "files": [],
+                "functions": []
+            }
+        }
 
-        # Dizini ağaç yapısı olarak gez
-        for current_root, dirs, files in os.walk(root_path):
-            # Yoksayılacak klasörleri (örneğin node_modules, .git) atla
-            dirs[:] = [d for d in dirs if d not in IGNORED_DIRS]
+        all_defined_functions = set()
+        all_called_functions = set()
+        all_imported_modules = set()
+        all_modules = set()
+
+        # 1. Aşama: Tüm .py dosyalarını bul ve AST ile ayrıştır
+        for root, dirs, files in os.walk(target_path):
+            dirs[:] = [d for d in dirs if d not in ignore_dirs]
             
-            curr_dir = Path(current_root)
-            
-            # Sadece Python kodlarını analiz et
-            py_files = [f for f in files if f.endswith(".py")]
-            
-            if py_files:
-                # Dizin başlığı
-                rel_path = curr_dir.relative_to(root_path)
-                display_path = "." if str(rel_path) == "." else str(rel_path)
-                mind_map.append(f"## Dizin: `{display_path}/`")
-                
-                # Her dosyanın iskeletini haritaya ekle
-                for py_file in py_files:
-                    file_path = curr_dir / py_file
-                    skeleton = ProjectAnalyzer.extract_file_skeleton(file_path)
-                    mind_map.append(skeleton)
+            for file in files:
+                if file.endswith(".py"):
+                    file_path = Path(root) / file
+                    rel_path = str(file_path.relative_to(target_path))
+                    module_name = rel_path.replace(os.sep, ".")[:-3] # Örn: tools.analyzer
                     
-        if len(mind_map) == 2:
-            return mind_map + "\n\n[-] Bu dizinde analiz edilecek Python dosyası bulunamadı."
+                    all_modules.add(module_name)
+                    
+                    try:
+                        with open(file_path, "r", encoding="utf-8") as f:
+                            code = f.read()
+                        
+                        tree = ast.parse(code, filename=str(file_path))
+                        visitor = CodeVisitor()
+                        visitor.visit(tree)
+                        
+                        # Graph ve dosya bilgilerini kaydet
+                        analysis_data["files"][rel_path] = {
+                            "imports": list(set(visitor.imports)),
+                            "classes": list(set(visitor.classes)),
+                            "functions": list(set(visitor.functions)),
+                            "calls": list(set(visitor.calls))
+                        }
+                        
+                        analysis_data["import_graph"][module_name] = list(set(visitor.imports))
+                        analysis_data["call_graph"][rel_path] = list(set(visitor.calls))
+                        
+                        # Kullanılmayan tespiti için kümeleri güncelle
+                        all_defined_functions.update(visitor.functions)
+                        all_called_functions.update(visitor.calls)
+                        all_imported_modules.update(visitor.imports)
+                        
+                    except SyntaxError:
+                        print(f"[-] Syntax Error atlanıyor: {rel_path}")
+                    except Exception as e:
+                        print(f"[-] Hata okuma ({rel_path}): {e}")
+
+        # 2. Aşama: Kullanılmayan Adayları Belirle (Statik Analiz)
+        # Giriş noktalarını (entry points) ve dunder (magic) metotları yoksay
+        ignore_funcs = {"__init__", "__main__", "__str__", "__repr__", "__call__", "main"}
+        ignore_files = {"__init__", "main", "app", "manage"}
+
+        # Kullanılmayan Fonksiyonlar: Tanımlanmış ama hiçbir yerde çağrılmamış
+        unused_funcs = all_defined_functions - all_called_functions - ignore_funcs
+        analysis_data["unused_candidates"]["functions"] = list(unused_funcs)
+
+        # Kullanılmayan Dosyalar: Proje içindeki modüllerden hiç import edilmemiş olanlar
+        for mod in all_modules:
+            mod_basename = mod.split(".")[-1]
+            if mod_basename not in ignore_files:
+                # Modül adı hiçbir import listesinde geçmiyorsa
+                is_imported = any(mod in imp or mod_basename in imp for imp in all_imported_modules)
+                if not is_imported:
+                    analysis_data["unused_candidates"]["files"].append(mod)
+
+        # 3. Aşama: JSON ve TXT olarak dışa aktar
+        ProjectAnalyzer._export_results(analysis_data, memory_dir)
+
+    @staticmethod
+    def _export_results(data: dict, memory_dir: str):
+        mem_path = Path(memory_dir)
+        os.makedirs(mem_path, exist_ok=True)
+        
+        json_path = mem_path / "proje_mind.json"
+        txt_path = mem_path / "proje_mind.md"
+
+        # JSON Çıktısı
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+
+        # TXT/Markdown Çıktısı
+        with open(txt_path, "w", encoding="utf-8") as f:
+            f.write("=== PROJE ANALİZ RAPORU ===\n\n")
             
-        logger.info(f"Proje taraması tamamlandı: {root_path}")
-        return "\n".join(mind_map)
+            f.write("1. DOSYA BİLEŞENLERİ (AST)\n")
+            f.write("-" * 40 + "\n")
+            for filepath, details in data["files"].items():
+                f.write(f"Dosya: {filepath}\n")
+                f.write(f"  - Importlar: {', '.join(details['imports']) or 'Yok'}\n")
+                f.write(f"  - Sınıflar : {', '.join(details['classes']) or 'Yok'}\n")
+                f.write(f"  - Metotlar : {', '.join(details['functions']) or 'Yok'}\n")
+                f.write(f"  - Çağrılar : {', '.join(details['calls']) or 'Yok'}\n\n")
+            
+            f.write("2. KULLANILMAYAN ADAYLAR (Statik Analiz)\n")
+            f.write("-" * 40 + "\n")
+            f.write(f"Öksüz Dosya/Modül Adayları:\n")
+            for uf in data["unused_candidates"]["files"]:
+                f.write(f"  - {uf}\n")
+            if not data["unused_candidates"]["files"]:
+                 f.write("  - Bulunamadı.\n")
+                 
+            f.write(f"\nÖksüz Fonksiyon Adayları:\n")
+            for func in data["unused_candidates"]["functions"]:
+                f.write(f"  - {func}()\n")
+            if not data["unused_candidates"]["functions"]:
+                 f.write("  - Bulunamadı.\n")
 
 

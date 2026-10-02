@@ -56,7 +56,7 @@ class SkillManager:
                                 self.skills.append({
                                     "name": file_path.stem,
                                     "command": f"/{file_path.stem}",
-                                    "description": lines.strip().replace("#", "").strip()
+                                    "description": lines[0].strip().replace("#", "").strip()
                                 })
                 except Exception as e:
                     logger.warning(f"Özel yetenek yüklenemedi ({file_path.name}): {str(e)}")

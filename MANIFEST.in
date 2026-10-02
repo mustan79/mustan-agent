@@ -1,8 +1,5 @@
-# MANIFEST.in
-
-include README.md
-include requirements.txt
-include src/skills/core_skills.yaml
-recursive-include src/skills/custom *.yaml *.md
-recursive-include docs *.md
-
+include README.md LICENSE pyproject.toml
+recursive-include src/skills *.yaml *.md
+recursive-include doc *.md
+recursive-include tests *.py
+global-exclude *.py[cod]

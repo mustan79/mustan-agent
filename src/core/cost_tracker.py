@@ -66,7 +66,7 @@ class CostTracker:
 
     def _archive_and_reset(self, old_data: dict) -> None:
         archive_dir = self.stats_path.parent / "stats_archive"
-        archive_dir.mkdir(exist_ok=True)
+        archive_dir.mkdir(parents=True, exist_ok=True)
         day = old_data.get("date", "unknown")
         try:
             (archive_dir / f"stats_{day}.json").write_text(
@@ -102,17 +102,20 @@ class CostTracker:
         return cost
 
     def can_spend(self, estimated_input: int = 2000, estimated_output: int = 1000, provider: str = "default") -> bool:
+        self._check_day()
         if provider.lower() == "ollama":
             return True
         est = self.estimate_cost(estimated_input, estimated_output, provider)
         return (self.spent_today + est) <= self.daily_limit_usd
 
     def is_near_limit(self) -> bool:
+        self._check_day()
         if self.daily_limit_usd <= 0:
             return False
         return self.spent_today >= self.daily_limit_usd * self.soft_limit_ratio
 
     def record(self, input_tokens: int, output_tokens: int, provider: str = "default") -> float:
+        self._check_day()
         cost = self.estimate_cost(input_tokens, output_tokens, provider)
         self.spent_today += cost
         self.input_tokens_today += input_tokens
@@ -121,14 +124,24 @@ class CostTracker:
         return cost
 
     def status_report(self) -> str:
+        self._check_day()
         pct = (self.spent_today / self.daily_limit_usd * 100) if self.daily_limit_usd else 0
         return (
             f"Bugün: ${self.spent_today:.4f} / ${self.daily_limit_usd:.2f} ({pct:.1f}%) | "
             f"Token {self.input_tokens_today} in + {self.output_tokens_today} out"
         )
 
+    def _check_day(self):
+        if self.last_reset != str(date.today()):
+            self._archive_and_reset({
+                "date": self.last_reset,
+                "spent_usd": self.spent_today,
+                "input_tokens": self.input_tokens_today,
+                "output_tokens": self.output_tokens_today,
+            })
 
-def get_cost_tracker(daily_limit: float = 5.0) -> CostTracker:
-    return CostTracker(daily_limit_usd=daily_limit)
+
+def get_cost_tracker(daily_limit: float = 5.0, stats_path: Optional[str] = None) -> CostTracker:
+    return CostTracker(daily_limit_usd=daily_limit, stats_path=stats_path)
 
 

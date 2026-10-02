@@ -34,6 +34,8 @@ class FileReadTool:
             return f"[-] Hata: Dosya bulunamadı -> {path}"
         
         try:
+            if path.stat().st_size > 2_000_000:
+                return "[-] Hata: Dosya 2 MB okuma sınırını aşıyor."
             # UTF-8 ile dosyayı oku, binary ise UnicodeDecodeError fırlatır
             with open(path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
@@ -86,6 +88,8 @@ class FileWriteTool:
         
         try:
             # Eğer dosyanın bulunması gereken alt klasörler yoksa (Örn: src/yeni/dosya.py) onları da yarat
+            if path.suffix.lower() == ".py":
+                compile(input_data.content, str(path), "exec")
             path.parent.mkdir(parents=True, exist_ok=True)
             
             with open(path, "w", encoding="utf-8") as f:

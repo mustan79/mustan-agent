@@ -59,6 +59,8 @@ class SmartEditTool:
         orijinal dosyaya yazar.
         """
         path = Path(input_data.file_path)
+        if not input_data.old_text:
+            return "[-] Hata: old_text boş olamaz."
 
         # 1. Dosya varlık kontrolü
         if not path.exists() or not path.is_file():
@@ -96,30 +98,10 @@ class SmartEditTool:
             # 4. Pre-Flight Check (Uçuş Öncesi Kontrol / Syntax Testi)
             # Sadece Python (.py) dosyaları için bu korumayı çalıştırıyoruz
             if path.suffix == ".py":
-                with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as temp_file:
-                    temp_file.write(new_content)
-                    temp_path = temp_file.name
-
                 try:
-                    # python -m py_compile komutuyla sözdizimi kontrolü
-                    result = subprocess.run(
-                        ["python", "-m", "py_compile", temp_path],
-                        capture_output=True,
-                        text=True
-                    )
-
-                    # Eğer çıkış kodu 0 değilse kod hatalıdır!
-                    if result.returncode != 0:
-                        error_msg = result.stderr.strip() or result.stdout.strip()
-                        logger.error(f"SmartEdit Syntax Hatası Yakaladı: {path.name}")
-                        return (
-                            f"[-] Sözdizimi (Syntax) Hatası! Kod diske YAZILMADI. "
-                            f"Lütfen şu hatayı inceleyip 'new_text' içeriğini düzelt:\n\n{error_msg}"
-                        )
-                finally:
-                    # Test bitti, geçici dosyayı temizle
-                    if os.path.exists(temp_path):
-                        os.remove(temp_path)
+                    compile(new_content, str(path), "exec")
+                except SyntaxError as exc:
+                    return f"[-] Sözdizimi (Syntax) Hatası! Kod diske YAZILMADI. {exc}"
 
             # 5. Testi geçti! Başarılıysa asıl dosyaya güvenle yaz
             with open(path, "w", encoding="utf-8") as f:

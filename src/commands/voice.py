@@ -1,11 +1,12 @@
 """
 MustanAgent v3.3 PRO - /voice komutu
-Test + dinle-konuş döngüsü.
+Test + dinle-konuş döngüsü ve LLM yanıt seslendirme entegrasyonu.
 """
 
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from services.voice import get_voice_service
@@ -34,38 +35,50 @@ def run_voice(args: str = "", coordinator: Any = None) -> bool:
 
     if sub in ("on", "enable"):
         voice.set_enabled(True)
+        logger.info("[+] TTS açıldı")
         print("[+] TTS açıldı")
+
         voice.speak("Ses sistemi açıldı")
         return True
 
     if sub in ("off", "disable"):
         voice.set_enabled(False)
         print("[+] TTS kapatıldı")
+        logger.info("[+] TTS kapatıldı")
         return True
 
     if sub == "test":
         print("[*] TTS test başlıyor...")
-        voice.speak("Merhaba! Mustan Agent ses sistemi çalışıyor.")
-        import time
-        time.sleep(0.3)
+        logger.info("[*] TTS test başlıyor...")
         st = voice.status()
         if st["tts_engine"] == "yok":
+            logger.info("[-] Hiçbir TTS engine bulunamadı.")
             print("[-] Hiçbir TTS engine bulunamadı.")
             print("    pip install pyttsx3  veya  pip install edge-tts playsound")
             return False
-        print(f"[+] Test kuyruğa alındı (engine: {st['tts_engine']})")
+        
+        logger.info(f"[+] Test başlatılıyor (engine: {st['tts_engine']})...")
+        print(f"[+] Test başlatılıyor (engine: {st['tts_engine']})...")
+        voice.speak("Merhaba! Mustan Agent ses sistemi sorunsuz çalışıyor.")
         return True
+
+    st = voice.status()
+    if st.get("stt_available") is False or st.get("stt_ok") is False:
+        print("[-] Mikrofon/STT kullanılabilir değil. speech_recognition ve PyAudio kurulumunu kontrol edin.")
+        return False
 
     print("🎤 Sesli mod aktif. Konuşun (çıkmak için 'iptal' / 'çıkış' veya Ctrl+C).")
     voice.speak("Sesli mod aktif. Dinliyorum.")
 
     try:
         while True:
-            text = voice.listen_and_transcribe(timeout=6.0, phrase_time_limit=15.0)
+            # 5 saniye dinle, maximum 12 saniye konuşma limiti
+            text = voice.listen_and_transcribe(timeout=5.0, phrase_time_limit=12.0)
             if not text:
                 continue
 
-            print(f"Siz: {text}")
+            print(f"\n🗣️ Siz: {text}")
+            logger.info(f"\n🗣️ Siz: {text}")
             low = text.lower().strip()
             if low in ("iptal", "çıkış", "çık", "exit", "quit", "kapat"):
                 voice.speak("Sesli mod kapatılıyor.")
@@ -80,11 +93,21 @@ def run_voice(args: str = "", coordinator: Any = None) -> bool:
                         cmd_args = parts_cmd[1] if len(parts_cmd) > 1 else ""
                         coordinator._route_command(cmd, cmd_args)
                     else:
+                        response_text = ""
+                        # Coordinator içinden dönen yanıtı yakalayıp seslendiriyoruz
                         if hasattr(coordinator, "chat"):
-                            coordinator.chat(text)
-                            voice.speak("Tamam, işledim.")
+                            response_text = coordinator.chat(text)
+                        elif hasattr(coordinator, "run"):
+                            response_text = coordinator.run(text)
+
+                        # Dönüş tipi string ise seslendir
+                        if isinstance(response_text, str) and response_text.strip():
+                            # Çok uzun yanıtların sadece ilk kısmını seslendir, ekrana tamamını bas
+                            speak_part = response_text.split("\n\n")[0][:250]
+                            voice.speak(speak_part)
                         else:
-                            voice.speak("Komut işlendi.")
+                            voice.speak("İşlem tamamlandı.")
+
                 except Exception as e:
                     logger.exception("Voice → coordinator hatası")
                     voice.speak("Bir hata oluştu.")
@@ -105,3 +128,4 @@ def speak(text: str) -> None:
 
 def get_tts_engine():
     return get_voice_service()
+

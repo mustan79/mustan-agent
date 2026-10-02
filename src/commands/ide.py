@@ -16,7 +16,15 @@ def run_ide(args: str) -> bool:
             print("\n[🔌 MustanBridge Aktif!]")
             print(f"IDE'nizdeki (VS Code) eklentinizi 'ws://localhost:{bridge.port}' adresine bağlayabilirsiniz.\n")
         else:
-            print("[-] MustanBridge zaten çalışıyor.")
+            if bridge.is_running:
+                print("[~] MustanBridge zaten çalışıyor.")
+                return True
+            print(f"[-] MustanBridge başlatılamadı: {bridge.last_error}")
+            return False
+        return True
+
+    elif args == "stop":
+        bridge.stop()
         return True
         
     elif args == "status" or not args:

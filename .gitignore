@@ -6,6 +6,7 @@ __pycache__/
 dist/
 build/
 .venv/
+.venv-*/
 venv/
 .env
 *.env
@@ -26,7 +27,7 @@ test_mem/
 MustanAgent_PRO_da_Dinamik_DAG_ve_RAG.m4a
 NotebookLM Mind Map.png
 "Yeni Metin Belgesi.txt"
-"test adımları.txt"
+test adımları.txt
 "tarihe notlar.txt"
 
 # Secrets / local

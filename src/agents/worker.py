@@ -18,24 +18,42 @@ from models.datatypes import WPStatus
 logger = logging.getLogger("mustan_agent.agents.worker")
 
 
-WORKER_SYSTEM_PROMPT = """Sen MustanAgent Worker ajanısın.
-Sana bir iş paketi (WP) ve varsa DeepPlan checklist'i verilecek.
-Görevin: Bu paketi eksiksiz tamamlamak.
+WORKER_SYSTEM_PROMPT = """Sen MustanAgent Worker ajanısın. Görevin sana verilen iş paketini (WP) eksiksiz tamamlamaktır.
 
-ZORUNLU KURALLAR:
-1. Her yanıtında önce <thought>...</thought> yaz.
-2. Kod yazmadan önce mevcut dosyaları oku (read_file).
-3. Değişiklikleri smart_edit veya write_file ile yap.
-4. Sözdizimi hatası olan kod yazma.
-5. İş bittiğinde <final>TAMAMLANDI: kısa özet + üretilen dosyalar</final> yaz.
-6. Hata alırsan aynı hatayı tekrarlama; strateji değiştir.
+KESİN YANIT FORMATI ZORUNLULUĞU:
+Sistem bir otomasyondur ve yanıtların bir yazılım tarafından (Regex ile) ayrıştırılacaktır. Bu yüzden sohbet etme, açıklama yapma, kurallar hakkında yorum yapma! YALNIZCA aşağıdaki şablonlara BİREBİR uy. 
+
+Her yanıtın İSTİSNASIZ BİR ŞEKİLDE <thought> bloğu ile başlamak ZORUNDADIR. <thought> etiketleri dışında asla düz metin yazma.
+
+--- ŞABLON 1: ARAÇ (TOOL) KULLANIRKEN ---
+<thought>
+Buraya adım adım ne yapacağını ve ne düşündüğünü yazacaksın.
+</thought>
+```bash
+ls -la
+
+```
+
+--- ŞABLON 2: GÖREVİ BİTİRİRKEN ---
+
+<thought>Doğrulamalar tamamlandı.</thought>
+<final>Görev başarıyla tamamlandı. İşte sonuçlar: ...</final>
+
+GEÇERLİ ARAÇLAR (Sadece Markdown formatında):
+
+1. Bash için: `bash \n komut \n`
+2. Dosya okumak için: `read_file \n path: dosya_yolu.txt \n`
+3. Dosya yazmak için: `write_file \n path: dosya.txt \n content: icerik \n`
+4. Dosya düzenlemek için: `smart_edit \n path: dosya.txt \n old_text: eski \n new_text: yeni \n`
+
+UNUTMA: <thought> ve <final> etiketlerinin DIŞINDA tek bir kelime bile normal metin yazman YASAKTIR. Sadece düşünce bloğu ve ardından araç kodu ya da  etiketi kullan.
 """
 
 
 class WorkerAgent(BaseAgent):
     def __init__(self, memory_dir: str = "Aimemory"):
         super().__init__(memory_dir)
-        self.runtime = AgentRuntime()
+        self.runtime = AgentRuntime(memory_dir=memory_dir)
         self.dag = DAGManager(memory_dir)
 
     def _load_deeplan(self, wp_id: str) -> str:
@@ -61,7 +79,7 @@ class WorkerAgent(BaseAgent):
 
         wp_id = wp_id.strip().upper()
         if not wp_id.startswith("WP-"):
-            wp_id = f"WP-{wp_id}" if wp_id.isdigit() else wp_id
+            wp_id = f"WP-{int(wp_id):03d}" if wp_id.isdigit() else wp_id
 
         self.log_action("WorkerAgent Start", f"WP: {wp_id} | force={force}")
 
@@ -120,6 +138,8 @@ class WorkerAgent(BaseAgent):
             parts += ["## DeepPlan Checklist", deeplan, ""]
         if mind:
             parts += ["## Proje Zihin Haritası (özet)", mind, ""]
+        if wp.error_log:
+            parts += ["## Önceki hata (onarılmalı)", wp.error_log, ""]
         parts.append("Yukarıdaki iş paketini tamamla. <final> ile bitir.")
         initial_prompt = "\n".join(parts)
 
@@ -127,7 +147,7 @@ class WorkerAgent(BaseAgent):
             result = self.runtime.run_agent_loop(
                 initial_prompt=initial_prompt,
                 system_prompt=WORKER_SYSTEM_PROMPT,
-                max_steps=12,
+                max_steps=30,
             )
         except Exception as e:
             logger.exception("Worker runtime hatası")
@@ -136,16 +156,16 @@ class WorkerAgent(BaseAgent):
             self.log_action("WorkerAgent Failed", str(e))
             return False
 
-        success = any(
-            x in (result or "").lower()
-            for x in ("tamamlandı", "done", "success", "başarılı")
-        )
+        success = bool(getattr(self.runtime, "completed", False))
 
         if success:
-            artifacts = self._extract_artifacts(result or "")
+            artifacts = sorted(self.runtime.modified_files) or self._extract_artifacts(result or "")
             art_dir = Path(self.memory_dir) / "artifacts" / wp_id
             art_dir.mkdir(parents=True, exist_ok=True)
             ok, msg = self.dag.mark_done(wp_id, artifacts=artifacts)
+            if not ok:
+                print(f"[-] {msg}")
+                return False
             print(f"[+] {msg}")
             if artifacts:
                 print(f"    Üretilenler: {', '.join(artifacts)}")
@@ -158,3 +178,16 @@ class WorkerAgent(BaseAgent):
         print(f"    {err[:200]}")
         self.log_action("WorkerAgent Failed", err)
         return False
+
+    def repair_task(self, wp_id: str) -> bool:
+        wp_id = wp_id.strip().upper()
+        if wp_id.isdigit():
+            wp_id = f"WP-{int(wp_id):03d}"
+        wp = self.dag.get_wp(wp_id)
+        if wp is None or wp.status != WPStatus.FAILED:
+            print("[-] Yalnızca başarısız iş paketleri onarılabilir.")
+            return False
+        if not wp.can_retry():
+            print("[-] Onarım denemesi sınırı doldu.")
+            return False
+        return self.execute_task(wp_id)

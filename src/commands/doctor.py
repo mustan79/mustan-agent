@@ -18,7 +18,10 @@ logger = logging.getLogger("mustan_agent.commands.doctor")
 
 
 def _check_dependency(module_name: str, display_name: str) -> Tuple[bool, str]:
-    spec = importlib.util.find_spec(module_name)
+    try:
+        spec = importlib.util.find_spec(module_name)
+    except (ImportError, ModuleNotFoundError, ValueError):
+        spec = None
     if spec is None:
         return False, f"[-] {display_name} eksik (pip install {module_name})"
     return True, f"[+] {display_name} kurulu"
@@ -54,7 +57,7 @@ def run_doctor() -> bool:
         ("pydantic", "pydantic"),
         ("keyring", "keyring"),
         ("yaml", "PyYAML"),
-        ("playwright", "playwright"),
+
     ]
     for mod, name in deps:
         results.append(_check_dependency(mod, name))
@@ -93,8 +96,6 @@ def run_doctor() -> bool:
     all_critical_ok = True
     for ok, msg in results:
         print(msg)
-        if not ok and "Vault" in msg and provider != "ollama":
-            all_critical_ok = False
         if not ok and "eksik" in msg:
             all_critical_ok = False
 

@@ -31,6 +31,10 @@ class TestMustanBridge:
         Soru: Sunucu zaten çalışıyorken tekrar başlatılırsa yeni thread açmayı reddediyor mu?
         """
         bridge = MustanBridge.get_instance()
+        def simulate_bind():
+            bridge.is_running = True
+            bridge._ready.set()
+        mock_thread.return_value.start.side_effect = simulate_bind
         
         # İlk başlatma başarılı olmalı
         result1 = bridge.start()

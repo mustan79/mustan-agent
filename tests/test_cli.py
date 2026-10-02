@@ -23,7 +23,7 @@ class TestCommandLineInterface:
         result = run_scan(target_dir="src", memory_dir="test_memory")
         
         assert result is True
-        mock_scan.assert_called_once_with(os.path.abspath("src"))
+        mock_scan.assert_called_once_with(os.path.abspath("src"), memory_dir="test_memory")
 
     @patch.dict(os.environ, clear=True)
     @patch("core.vault.keyring.get_password")

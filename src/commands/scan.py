@@ -1,5 +1,6 @@
 import os
 import logging
+import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -11,34 +12,29 @@ logger = logging.getLogger("mustan_agent.commands.scan")
 def run_scan(target_dir: str = ".", memory_dir: Optional[str] = None) -> bool:
     """
     /scan komutunun çalışma mantığıdır.
-    Belirtilen dizini AST tabanlı analiz motoru ile tarar ve çıkarılan iskeleti
-    Aimemory/proje_mind.md dosyasına kalıcı olarak kaydeder.
+    Belirtilen dizini gelişmiş AST tabanlı analiz motoru ile tarar.
+    Çıktıları JSON ve md formatlarında Aimemory/ dizinine kaydeder.
     """
     mem_dir = memory_dir or settings.config.memory.base_dir
-    output_path = Path(mem_dir) / "proje_mind.md"
-    
     target_path = Path(target_dir).resolve()
+    
     logger.info(f"Tarama başlatılıyor. Hedef: {target_path}")
-    print(f"\n[>] Keşif Ajanı (Explorer) '{target_path.name}' dizinini tarıyor...")
+    print(f"\n[>] Gelişmiş Keşif Ajanı (AST Explorer) '{target_path.name}' dizinini tarıyor...")
     
     if not target_path.exists() or not target_path.is_dir():
         print(f"[-] Hata: Hedef dizin bulunamadı ({target_path})")
         return False
 
     try:
-        # 1. ProjectAnalyzer ile dizini tara (AST iskeletini çıkar)
-        mind_map_content = ProjectAnalyzer.scan_directory(str(target_path))
+        # AST iskeletini çıkar, Grafikleri oluştur ve JSON + TXT olarak yaz
+        ProjectAnalyzer.scan_directory(str(target_path), memory_dir=mem_dir)
         
-        # 2. Hafıza dizinini oluştur (eğer yoksa)
-        os.makedirs(mem_dir, exist_ok=True)
-        
-        # 3. Sonucu proje_mind.md olarak mühürle
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(mind_map_content)
+        txt_output = Path(mem_dir) / "proje_mind.md"
+        json_output = Path(mem_dir) / "proje_mind.json"
             
-        print(f"[+] Proje Zihin Haritası başarıyla oluşturuldu!")
-        print(f"[+] Kayıt yeri: {output_path}")
-        logger.info(f"Tarama tamamlandı ve {output_path} kaydedildi.")
+        print(f"[+] Proje Zihin Haritası ve Call Graph başarıyla oluşturuldu!")
+        print(f"[+] Kayıt yerleri:\n  - {txt_output}\n  - {json_output}")
+        logger.info(f"Tarama tamamlandı ve {mem_dir} dizinine kaydedildi.")
         
         return True
         
@@ -46,4 +42,3 @@ def run_scan(target_dir: str = ".", memory_dir: Optional[str] = None) -> bool:
         logger.error(f"Tarama sırasında beklenmeyen hata: {str(e)}")
         print(f"\n[-] Tarama başarısız oldu: {str(e)}")
         return False
-

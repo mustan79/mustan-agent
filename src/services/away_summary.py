@@ -1,7 +1,6 @@
 import time
 import logging
 from core.query_engine import LLMClient
-from memory.workspace_md import get_workspace_rules
 
 logger = logging.getLogger("mustan_agent.services.away_summary")
 

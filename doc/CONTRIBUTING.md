@@ -10,8 +10,9 @@ MustanAgent projesine ilgi duyduğunuz için teşekkürler! Bu proje, otonom yaz
 ## Geliştirme Ortamı Kurulumu
 1. Projeyi forklayın ve klonlayın.
 2. Sanal ortamınızı (venv) oluşturun.
-3. `pip install -e .` komutu ile projeyi geliştirici modunda (editable) kurun.
-4. Gerekli test araçları için `pip install pytest` çalıştırın.
+3. `python -m pip install -e ".[dev,ide]"` ile geliştirme ve test bağımlılıklarını kurun.
+4. `python -m pytest -q` çalıştırın. Testler API anahtarlarını kullanmaz; canlı servisler mock edilir.
+5. `python -m build` ve `python -m twine check dist/*` ile paketlemeyi doğrulayın.
 
 ## Kod Standartları
 * Tüm kodlar **Type-Safe** olmalı ve `Pydantic` şemaları kullanılmalıdır.

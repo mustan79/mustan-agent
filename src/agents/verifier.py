@@ -6,6 +6,9 @@ QA / TDD uzmanı. DAGManager ile durum günceller.
 from __future__ import annotations
 
 import logging
+import sys
+import shlex
+import os
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -42,13 +45,13 @@ class VerifierAgent(BaseAgent):
             return f"[-] Komut hatası: {e}"
 
     def _run_pytest(self, target: Optional[str] = None) -> str:
-        cmd = "python -m pytest -q --tb=short"
+        cmd = f'"{sys.executable}" -m pytest -q --tb=short'
         if target:
-            cmd += f" {target}"
+            cmd += " " + (f'"{target}"' if os.name == "nt" else shlex.quote(target))
         return self._run_command(cmd)
 
     def _run_py_compile(self, file_path: str) -> str:
-        return self._run_command(f'python -m py_compile "{file_path}"')
+        return self._run_command(f'"{sys.executable}" -m py_compile "{file_path}"')
 
     def _analyze_failure(self, output: str) -> str:
         try:
@@ -81,14 +84,14 @@ class VerifierAgent(BaseAgent):
             print(f"[*] Verifier → py_compile: {target_file}")
             out = self._run_py_compile(target_file)
             results.append(f"### py_compile ({target_file})\n{out}")
-            if any(x in out for x in ("[-]", "Error", "SyntaxError")):
+            if out.startswith("[-]"):
                 overall_success = False
                 results.append(f"### Analiz\n{self._analyze_failure(out)}")
 
         if wp_id:
             wp_id = wp_id.strip().upper()
             if not wp_id.startswith("WP-"):
-                wp_id = f"WP-{wp_id}" if wp_id.isdigit() else wp_id
+                wp_id = f"WP-{int(wp_id):03d}" if wp_id.isdigit() else wp_id
 
             wp = self.dag.get_wp(wp_id)
             if wp is None:
@@ -101,14 +104,14 @@ class VerifierAgent(BaseAgent):
                     if art.endswith(".py") and Path(art).exists():
                         out = self._run_py_compile(art)
                         results.append(f"### py_compile ({art})\n{out}")
-                        if any(x in out for x in ("Error", "SyntaxError", "[-]")):
+                        if out.startswith("[-]"):
                             overall_success = False
 
                 tags = [t.lower() for t in wp.tags]
                 if "test" in tags or any("test" in a.lower() for a in wp.artifacts):
                     out = self._run_pytest()
                     results.append(f"### pytest\n{out}")
-                    if any(x in out.lower() for x in ("failed", "error")):
+                    if out.startswith("[-]"):
                         overall_success = False
                         results.append(f"### Analiz\n{self._analyze_failure(out)}")
 
@@ -125,7 +128,7 @@ class VerifierAgent(BaseAgent):
             print("[*] Verifier → genel pytest")
             out = self._run_pytest()
             results.append(f"### pytest\n{out}")
-            if any(x in out.lower() for x in ("failed", "error")):
+            if out.startswith("[-]"):
                 overall_success = False
                 results.append(f"### Analiz\n{self._analyze_failure(out)}")
 

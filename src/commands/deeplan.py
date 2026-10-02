@@ -99,7 +99,7 @@ def run_deeplan(wp_id: str, memory_dir: Optional[str] = None) -> bool:
 
     wp_id = wp_id.strip().upper()
     if not wp_id.startswith("WP-"):
-        wp_id = f"WP-{wp_id}" if wp_id.isdigit() else wp_id
+        wp_id = f"WP-{int(wp_id):03d}" if wp_id.isdigit() else wp_id
 
     memory_dir = _get_memory_dir(memory_dir)
     os.makedirs(memory_dir, exist_ok=True)
@@ -149,7 +149,13 @@ Bu iş paketini atomik checklist JSON'una çevir.
         debug.write_text(response, encoding="utf-8")
         return False
 
+    if not isinstance(data, dict):
+        print("[-] Checklist bir JSON nesnesi olmalı.")
+        return False
     checklist = data.get("checklist") or []
+    if not isinstance(checklist, list) or not checklist or not all(isinstance(item, dict) and item.get("action") for item in checklist):
+        print("[-] Geçerli ve boş olmayan checklist gerekli.")
+        return False
     lines = [
         f"# DeepPlan — {wp_id}",
         f"**Başlık:** {data.get('title') or wp.title}",

@@ -75,12 +75,16 @@ def _extract_json(text: str) -> Optional[dict]:
 
 
 def _build_dag_from_llm(raw: dict, goal: str) -> DAGPlan:
+    if not isinstance(raw, dict):
+        raise ValueError("Plan must be a JSON object")
     plan = DAGPlan(goal=raw.get("goal") or goal)
     nodes_data = raw.get("nodes") or raw.get("work_packages") or []
     for i, item in enumerate(nodes_data, start=1):
         if not isinstance(item, dict):
             continue
         wp_id = item.get("id") or f"WP-{i:03d}"
+        if not re.fullmatch(r"WP-\d{3}", wp_id) or wp_id in plan.nodes:
+            raise ValueError(f"Invalid or duplicate work package: {wp_id}")
         wp = WorkPackage(
             id=wp_id,
             title=item.get("title") or item.get("name") or wp_id,
@@ -90,6 +94,10 @@ def _build_dag_from_llm(raw: dict, goal: str) -> DAGPlan:
             status=WPStatus.PENDING,
         )
         plan.add_node(wp)
+    for wp in plan.nodes.values():
+        if any(dep not in plan.nodes for dep in wp.depends_on):
+            raise ValueError(f"Unknown dependency in {wp.id}")
+    plan.topological_order()
     plan.get_ready_nodes()
     return plan
 
@@ -179,8 +187,3 @@ Yukarıdaki hedef için DAG iş paketlerini JSON olarak üret.
     return True
 
 
-if __name__ == "__main__":
-    import sys
-    goal_arg = " ".join(sys.argv[1:]) or "Örnek hedef: basit bir REST API iskeleti kur"
-    success = run_plan(goal_arg)
-    raise SystemExit(0 if success else 1)

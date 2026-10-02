@@ -31,6 +31,9 @@ class MustanBridge:
         
         self.server_thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._ready = threading.Event()
+        self._server = None
+        self.last_error = ""
 
     @classmethod
     def get_instance(cls):
@@ -39,7 +42,7 @@ class MustanBridge:
             cls._instance = cls()
         return cls._instance
 
-    async def _ws_handler(self, websocket, path):
+    async def _ws_handler(self, websocket, path=None):
         """IDE'den gelen JSON mesajlarını dinleyen asenkron dinleyici."""
         self.connected_ide = True
         logger.info("IDE MustanBridge'e başarıyla bağlandı.")
@@ -47,6 +50,8 @@ class MustanBridge:
             async for message in websocket:
                 try:
                     data = json.loads(message)
+                    if not isinstance(data, dict):
+                        continue
                     event_type = data.get("type")
                     
                     if event_type == "cursor_move":
@@ -65,9 +70,24 @@ class MustanBridge:
         """Kendi event loop'unda sunucuyu ayağa kaldırır."""
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
-        start_server = websockets.serve(self._ws_handler, "localhost", self.port)
-        self._loop.run_until_complete(start_server)
-        self._loop.run_forever()
+        async def bind():
+            self._server = await websockets.serve(self._ws_handler, "127.0.0.1", self.port)
+            self.port = self._server.sockets[0].getsockname()[1]
+            self.is_running = True
+            self._ready.set()
+        try:
+            self._loop.run_until_complete(bind())
+            self._loop.run_forever()
+        except Exception as exc:
+            self.last_error = str(exc)
+            logger.exception("IDE sunucusu başlatılamadı")
+        finally:
+            self.is_running = False
+            self._ready.set()
+            if self._server:
+                self._server.close()
+                self._loop.run_until_complete(self._server.wait_closed())
+            self._loop.close()
 
     def start(self) -> bool:
         """Sunucuyu arka planda (Daemon) başlatır."""
@@ -77,11 +97,17 @@ class MustanBridge:
             
         if self.is_running:
             return False
-            
+        self._ready.clear()
+        self.last_error = ""
         self.server_thread = threading.Thread(target=self._run_server, daemon=True)
         self.server_thread.start()
-        self.is_running = True
-        return True
+        self._ready.wait(timeout=5)
+        return self.is_running
+
+    def stop(self):
+        if self._loop and self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            self.server_thread.join(timeout=5)
 
     def get_ide_context(self) -> str:
         """

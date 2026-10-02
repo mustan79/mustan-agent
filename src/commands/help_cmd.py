@@ -37,7 +37,7 @@ Sistem
 
 Diger
   /voice [test|status|on|off]   Sesli mod
-  /ide [start|status]           IDE WebSocket koprusu
+  /ide [start|status|stop]      IDE WebSocket koprusu (etkilesimli oturum)
   /btw <soru>                   Ana akisi bozmadan kisa soru
   /buddy                        Memocan ayarlari
 

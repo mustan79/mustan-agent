@@ -40,13 +40,17 @@ def run_set(args: str) -> bool:
             print(f"[-] Geçersiz provider. İzin verilenler: {', '.join(allowed)}")
             return False
         model = parts[2] if len(parts) > 2 else None
-        settings.update_provider(provider, model=model)
+        if not settings.update_provider(provider, model=model):
+            print("[-] Provider ayarı diske kaydedilemedi.")
+            return False
         print(f"[+] Provider → {provider}" + (f" | model → {model}" if model else ""))
         return True
 
     elif action == "model":
         model = parts[1]
-        settings.update_llm_model(model)
+        if not settings.update_llm_model(model):
+            print("[-] Model ayarı diske kaydedilemedi.")
+            return False
         print(f"[+] Model → {model}")
         return True
 
@@ -57,7 +61,9 @@ def run_set(args: str) -> bool:
         key_name = parts[1].upper()
         value = parts[2]
         try:
-            vault.set_secret(key_name, value)
+            if not vault.set_secret(key_name, value):
+                print("[-] Anahtar kaydedilemedi. Sistem anahtarlığını kontrol edin.")
+                return False
             print(f"[+] Vault'a kaydedildi: {key_name}")
             return True
         except Exception as e:
@@ -68,7 +74,9 @@ def run_set(args: str) -> bool:
         url = parts[1]
         try:
             settings.config.llm.ollama_base_url = url
-            settings.save_config()
+            if not settings.save_config():
+                print("[-] Adres ayarı diske kaydedilemedi.")
+                return False
             print(f"[+] Ollama base_url → {url}")
             return True
         except Exception as e:

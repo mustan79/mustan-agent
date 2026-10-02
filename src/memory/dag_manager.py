@@ -120,6 +120,11 @@ class DAGManager:
             if new_status == WPStatus.FAILED:
                 blocked = dag.propagate_block(wp_id)
             elif new_status == WPStatus.DONE:
+                for candidate in dag.nodes.values():
+                    if candidate.status == WPStatus.BLOCKED and (candidate.error_log or "").startswith("Bağımlı düğüm başarısız/engellendi:"):
+                        if all(dag.nodes.get(dep) and dag.nodes[dep].status == WPStatus.DONE for dep in candidate.depends_on):
+                            candidate.status = WPStatus.PENDING
+                            candidate.error_log = None
                 dag.get_ready_nodes()
 
             if not self.save(dag):

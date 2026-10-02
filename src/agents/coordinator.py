@@ -70,6 +70,14 @@ Kurallar:
 
 
 class MustanCoordinator:
+    @staticmethod
+    def is_known_command(cmd: str) -> bool:
+        return cmd.lower().lstrip("/") in {
+            "help", "list", "komutlar", "doctor", "status", "summary", "telemetry",
+            "scope", "scan", "plan", "deeplan", "operate", "coder", "reflect",
+            "rewind", "btw", "ide", "set", "worker", "verify", "voice", "buddy", "repair",
+        }
+
     def __init__(self, memory_dir: Optional[str] = None):
         try:
             default_mem = settings.config.memory.base_dir
@@ -148,13 +156,13 @@ class MustanCoordinator:
         elif cmd in ("/plan", "plan"):
             if not args:
                 print("[-] /plan için hedef gerekli. Örnek: /plan kullanıcı girişi ekle")
-                return True
+                return False
             return bool(self.planner.execute_task(task_description=args))
 
         elif cmd in ("/deeplan", "deeplan"):
             if not args:
                 print("[-] /deeplan için WP id gerekli. Örnek: /deeplan WP-001")
-                return True
+                return False
             return bool(self.planner.execute_task(task_description="", wp_id=args))
 
         elif cmd in ("/operate", "operate", "/coder", "coder"):
@@ -178,8 +186,14 @@ class MustanCoordinator:
         elif cmd in ("/worker", "worker"):
             if not args:
                 print("[-] /worker için WP id gerekli")
-                return True
+                return False
             return bool(self.worker.execute_task(wp_id=args))
+
+        elif cmd in ("/repair", "repair"):
+            if not args:
+                print("[-] /repair için WP id gerekli")
+                return False
+            return self.worker.repair_task(args)
 
         elif cmd in ("/verify", "verify"):
             if args.upper().startswith("WP-") or (args.isdigit()):
@@ -232,7 +246,16 @@ class MustanCoordinator:
         if self.buddy and self.buddy.process_input(text):
             return True
 
-        intent = self._analyze_intent(text)
+        from core.intent_router import IntentRouter, Intent
+        match = IntentRouter().route(text)
+        if match.source == "rule":
+            intent = match.intent.value
+            args = match.args
+            if match.intent == Intent.SCAN and not (args.endswith("/") or os.path.isdir(args)):
+                args = ""
+        else:
+            intent = self._analyze_intent(text)
+            args = text
         logger.info("Intent: %s ← %s", intent, text[:80])
 
         if intent in ("/chat", "/unknown"):
@@ -240,7 +263,7 @@ class MustanCoordinator:
             print(reply)
             return True
 
-        return self._route_command(intent, text)
+        return self._route_command(intent, args)
 
     def start_interactive_session(self) -> None:
         print("🤖 MustanAgent v3.3 PRO hazır. Komut veya doğal dil yazabilirsiniz.")
@@ -264,7 +287,7 @@ class MustanCoordinator:
                 cmd = parts[0].lower()
                 args = parts[1] if len(parts) > 1 else ""
                 handled = self._route_command(cmd, args)
-                if not handled:
+                if not self.is_known_command(cmd):
                     print(f"[-] Bilinmeyen komut: {cmd}")
             else:
                 self.chat(user_input)

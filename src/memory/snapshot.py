@@ -16,7 +16,13 @@ def restore_checkpoint(checkpoint_id: str) -> str:
         # Yedeklerin (snapshot) tutulduğu ana dizin
         mem_dir = settings.config.memory.base_dir
         snapshot_base_dir = Path(mem_dir) / "snapshots"
-        target_snapshot = snapshot_base_dir / checkpoint_id
+        snapshot_base_dir = snapshot_base_dir.resolve()
+        raw_snapshot = snapshot_base_dir / checkpoint_id
+        target_snapshot = raw_snapshot.resolve()
+        if target_snapshot.parent != snapshot_base_dir or not checkpoint_id.strip():
+            return "[-] Hata: Geçersiz checkpoint kimliği."
+        if raw_snapshot.is_symlink() or any(p.is_symlink() for p in target_snapshot.rglob("*")):
+            return "[-] Hata: Bağlantı içeren checkpoint geri yüklenemez."
 
         if not target_snapshot.exists():
             return f"[-] Hata: '{checkpoint_id}' adında bir yedek bulunamadı. Lütfen 'Aimemory/snapshots/' klasörünü kontrol edin."

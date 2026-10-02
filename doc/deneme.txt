@@ -1,0 +1,7 @@
+## tasks
+[ ] chrome aç
+[ ] scholar içinde "cem emeksiz" yazarının sayfasına git
+[ ] yazara ait makalelerin başlıklarını al
+[ ] elde ettiğin başlıkları bir liste halinde /doc klasörü içine papers.txt olarak kaydet
+[ ] sonra chrome yi kapat
+[ ] işlemler tamamlandığında final diyerek görevi sonlandır

@@ -1,7 +1,7 @@
 """
 MustanAgent v3.3 PRO - Query Engine & LLMClient
 Desteklenen provider'lar: gemini, openai, openrouter, ollama, ollama_cloud
-CostTracker + RAG entegrasyonu.
+CostTracker + RAG + Telemetry entegrasyonu.
 """
 
 from __future__ import annotations
@@ -43,7 +43,8 @@ class LLMClient:
             budget = settings.config.llm.daily_budget_usd
         except Exception:
             budget = 5.0
-        self.cost_tracker: CostTracker = get_cost_tracker(daily_limit=budget)
+        from pathlib import Path
+        self.cost_tracker: CostTracker = get_cost_tracker(daily_limit=budget, stats_path=str(Path(settings.config.memory.base_dir) / "stats.json"))
         self._rag: Optional[RAGBuffer] = None
         self._initialized = True
 
@@ -150,7 +151,6 @@ class LLMClient:
 
         api_key = self._get_env_or_vault(api_key_name)
 
-        # Local ollama için key zorunlu değil
         if not api_key:
             if provider in ("ollama",):
                 api_key = "ollama"
@@ -222,7 +222,11 @@ class LLMClient:
         caller: str = "llm.generate_with_stats",
     ) -> Tuple[str, Dict[str, Any]]:
         provider, model = self._get_active_model_and_provider()
-        mem = memory_dir or "Aimemory"
+        mem = memory_dir or settings.config.memory.base_dir or "Aimemory"
+        from memory.workspace_md import get_workspace_rules
+        rules = get_workspace_rules(mem)
+        if rules:
+            system_prompt = (system_prompt or "") + "\n\nPROJE KURALLARI:\n" + rules[:5000]
 
         final_prompt = prompt
         if use_rag:
@@ -247,107 +251,117 @@ class LLMClient:
                 self.cost_tracker.status_report(),
             )
 
-        last_error: Optional[Exception] = None
-        for attempt in range(1, max_retries + 1):
-            try:
-                if provider in ("gemini", "google"):
-                    text, in_tok, out_tok = self._call_gemini(
-                        final_prompt, system_prompt, model, temperature, images
+        # TELEMETRY ENTEGRASYONU
+        with track_llm(caller=caller, provider=provider, model=model, memory_dir=mem) as ctx:
+            last_error: Optional[Exception] = None
+            for attempt in range(1, max_retries + 1):
+                try:
+                    if provider in ("gemini", "google"):
+                        text, in_tok, out_tok = self._call_gemini(
+                            final_prompt, system_prompt, model, temperature, images
+                        )
+
+                    elif provider == "ollama":
+                        try:
+                            base_url = settings.config.llm.ollama_base_url or "http://localhost:11434"
+                        except Exception:
+                            base_url = "http://localhost:11434"
+                        base_url = base_url.rstrip("/")
+                        if not base_url.endswith("/v1"):
+                            base_url = base_url + "/v1"
+                        text, in_tok, out_tok = self._call_openai_compatible(
+                            provider="ollama",
+                            prompt=final_prompt,
+                            system_prompt=system_prompt,
+                            model=model,
+                            temperature=temperature,
+                            base_url=base_url,
+                            api_key_name="OLLAMA_API_KEY",
+                        )
+
+                    elif provider == "ollama_cloud":
+                        try:
+                            base_url = getattr(settings.config.llm, "ollama_base_url", None)
+                        except Exception:
+                            base_url = "https://ollama.com/v1"
+                        text, in_tok, out_tok = self._call_openai_compatible(
+                            provider="ollama_cloud",
+                            prompt=final_prompt,
+                            system_prompt=system_prompt,
+                            model=model,
+                            temperature=temperature,
+                            base_url=base_url,
+                            api_key_name="OLLAMA_API_KEY",
+                        )
+
+                    elif provider == "openrouter":
+                        text, in_tok, out_tok = self._call_openai_compatible(
+                            provider="openrouter",
+                            prompt=final_prompt,
+                            system_prompt=system_prompt,
+                            model=model,
+                            temperature=temperature,
+                            base_url="https://openrouter.ai/api/v1",
+                            api_key_name="OPENROUTER_API_KEY",
+                            extra_headers={
+                                "HTTP-Referer": "https://github.com/mustan79/mustan-agent",
+                                "X-Title": "MustanAgent",
+                            },
+                        )
+
+                    else:  # openai
+                        text, in_tok, out_tok = self._call_openai_compatible(
+                            provider="openai",
+                            prompt=final_prompt,
+                            system_prompt=system_prompt,
+                            model=model,
+                            temperature=temperature,
+                            base_url=None,
+                            api_key_name="OPENAI_API_KEY",
+                        )
+
+                    cost = self.cost_tracker.record(in_tok, out_tok, provider)
+
+                    # Telemetry nesnesine token ve maliyet verilerini aktarıyoruz
+                    ctx["input_tokens"] = in_tok
+                    ctx["output_tokens"] = out_tok
+                    ctx["total_tokens"] = in_tok + out_tok
+                    ctx["cost_usd"] = cost
+                    ctx["provider"] = provider
+                    ctx["model"] = model
+
+                    stats = {
+                        "provider": provider,
+                        "model": model,
+                        "input_tokens": in_tok,
+                        "output_tokens": out_tok,
+                        "total_tokens": in_tok + out_tok,
+                        "cost_usd": round(cost, 6),
+                        "spent_today_usd": round(self.cost_tracker.spent_today, 6),
+                    }
+                    logger.info(
+                        "LLM OK | %s/%s | %d+%d token | $%.5f",
+                        provider, model, in_tok, out_tok, cost,
                     )
+                    return text, stats
 
-                elif provider == "ollama":
-                    # Yerel Ollama
-                    try:
-                        base_url = settings.config.llm.ollama_base_url or "http://localhost:11434"
-                    except Exception:
-                        base_url = "http://localhost:11434"
-                    base_url = base_url.rstrip("/")
-                    if not base_url.endswith("/v1"):
-                        base_url = base_url + "/v1"
-                    text, in_tok, out_tok = self._call_openai_compatible(
-                        provider="ollama",
-                        prompt=final_prompt,
-                        system_prompt=system_prompt,
-                        model=model,
-                        temperature=temperature,
-                        base_url=base_url,
-                        api_key_name="OLLAMA_API_KEY",  # yoksa "ollama" kullanılır
-                    )
+                except Exception as e:
+                    last_error = e
+                    err = str(e).lower()
+                    if any(x in err for x in ("429", "rate", "503", "unavailable", "timeout")):
+                        wait = min(2 ** attempt + 1, 30)
+                        logger.warning(
+                            "Geçici hata (deneme %d/%d), %ds bekleniyor...",
+                            attempt, max_retries, wait,
+                        )
+                        time.sleep(wait)
+                        continue
+                    raise
 
-                elif provider == "ollama_cloud":
-                    # Ollama Cloud – doğru OpenAI-uyumlu endpoint
-                    try:
-                        base_url = getattr(settings.config.llm, "ollama_base_url", None)
-                    except Exception:
-                        base_url = "https://ollama.com/v1"
-                    text, in_tok, out_tok = self._call_openai_compatible(
-                        provider="ollama_cloud",
-                        prompt=final_prompt,
-                        system_prompt=system_prompt,
-                        model=model,
-                        temperature=temperature,
-                        base_url=base_url,
-                        api_key_name="OLLAMA_API_KEY",
-                    )
+            raise RuntimeError(
+                f"LLM çağrısı {max_retries} denemeden sonra başarısız: {last_error}"
+            ) from last_error
 
-                elif provider == "openrouter":
-                    text, in_tok, out_tok = self._call_openai_compatible(
-                        provider="openrouter",
-                        prompt=final_prompt,
-                        system_prompt=system_prompt,
-                        model=model,
-                        temperature=temperature,
-                        base_url="https://openrouter.ai/api/v1",
-                        api_key_name="OPENROUTER_API_KEY",
-                        extra_headers={
-                            "HTTP-Referer": "https://github.com/mustan79/mustan-agent",
-                            "X-Title": "MustanAgent",
-                        },
-                    )
-
-                else:  # openai
-                    text, in_tok, out_tok = self._call_openai_compatible(
-                        provider="openai",
-                        prompt=final_prompt,
-                        system_prompt=system_prompt,
-                        model=model,
-                        temperature=temperature,
-                        base_url=None,
-                        api_key_name="OPENAI_API_KEY",
-                    )
-
-                cost = self.cost_tracker.record(in_tok, out_tok, provider)
-                stats = {
-                    "provider": provider,
-                    "model": model,
-                    "input_tokens": in_tok,
-                    "output_tokens": out_tok,
-                    "total_tokens": in_tok + out_tok,
-                    "cost_usd": round(cost, 6),
-                    "spent_today_usd": round(self.cost_tracker.spent_today, 6),
-                }
-                logger.info(
-                    "LLM OK | %s/%s | %d+%d token | $%.5f",
-                    provider, model, in_tok, out_tok, cost,
-                )
-                return text, stats
-
-            except Exception as e:
-                last_error = e
-                err = str(e).lower()
-                if any(x in err for x in ("429", "rate", "503", "unavailable", "timeout")):
-                    wait = min(2 ** attempt + 1, 30)
-                    logger.warning(
-                        "Geçici hata (deneme %d/%d), %ds bekleniyor...",
-                        attempt, max_retries, wait,
-                    )
-                    time.sleep(wait)
-                    continue
-                raise
-
-        raise RuntimeError(
-            f"LLM çağrısı {max_retries} denemeden sonra başarısız: {last_error}"
-        ) from last_error
 
 class QueryEngine:
     def __init__(
@@ -363,6 +377,4 @@ class QueryEngine:
 
     def ask(self, prompt: str, tools: Optional[List[Any]] = None) -> str:
         return self.client.generate_content(prompt, system_prompt=self.system_prompt)
-
-
 

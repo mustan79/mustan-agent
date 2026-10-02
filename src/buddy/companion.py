@@ -23,7 +23,7 @@ class BuddyManager:
         self.ability = ABILITIES[species]
         self.sprite = "\n".join(SPRITES[species])
         
-        self.voice_service = VoiceService()
+        self._voice_service = VoiceService() if voice_enabled else None
         self.voice_enabled = voice_enabled
         self.llm = LLMClient()
         
@@ -36,6 +36,12 @@ class BuddyManager:
         
         # Otonom arka plan kontrolcüsünü başlat
         self._start_daemon()
+
+    @property
+    def voice_service(self):
+        if self._voice_service is None:
+            self._voice_service = VoiceService()
+        return self._voice_service
 
     def _start_daemon(self):
         """Ajanın REPL'sini dondurmadan arka planda çalışan yaşam döngüsü motoru."""

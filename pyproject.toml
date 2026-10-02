@@ -1,50 +1,54 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=77.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "mustan-agent"
-version = "3.3.0"
+version = "3.3.1"
 description = "MustanAgent v3.3 PRO - Otonom Yazılım Geliştirme ve Mimari Asistanı"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     {name = "Mustafa Tan", email = "mustan79@gmail.com"}
 ]
 keywords = ["ai", "autonomous", "agent", "coding", "cli", "harness-engineering"]
 dependencies = [
-    "google-genai>=0.1.0",
-    "openai>=1.0.0",
-    "pydantic>=2.0.0",
-    "keyring>=24.0.0",
-    "playwright>=1.40.0",
-    "SpeechRecognition>=3.10.0",
-    "PyAudio>=0.2.14",
-    "PyYAML>=6.0",
-    "websockets>=12.0",
-    "pyautogui>=0.9.54",
-    "Pillow>=10.0.0",
-    "keyboard>=0.13.5",
-    "pyttsx3>=2.90"
+    "google-genai>=1.0,<2",
+    "openai>=1.0,<3",
+    "pydantic>=2.0,<3",
+    "keyring>=24.0,<26",
+    "PyYAML>=6.0,<7",
 ]
 
-# Geliştirici (Dev) ve Test araçları
 [project.optional-dependencies]
-dev = [
-    "pytest>=7.0.0"
-]
+dev = ["pytest>=7.0", "build>=1.0", "twine>=5.0"]
+voice = ["SpeechRecognition>=3.10", "PyAudio>=0.2.14", "pyttsx3>=2.90"]
+browser = ["playwright>=1.40"]
+ide = ["websockets>=12,<17"]
+desktop = ["pyautogui>=0.9.54", "Pillow>=10", "keyboard>=0.13.5"]
+all = ["SpeechRecognition>=3.10", "PyAudio>=0.2.14", "pyttsx3>=2.90", "playwright>=1.40", "websockets>=12,<17", "pyautogui>=0.9.54", "Pillow>=10", "keyboard>=0.13.5"]
 
 [project.urls]
-Homepage = "https://github.com/mustan/mustan-agent"
-Documentation = "https://github.com/mustan/mustan-agent/README.md"
+Homepage = "https://github.com/mustan79/mustan-agent"
+Documentation = "https://github.com/mustan79/mustan-agent/blob/main/README.md"
 
 [project.scripts]
 mustan-agent = "main:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
+py-modules = ["main"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+exclude = ["*egg-info*", "*__pycache__*"]
 
+
+[tool.setuptools.package-data]
+skills = ["*.yaml", "custom/*.yaml", "custom/*.md"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

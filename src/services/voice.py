@@ -1,303 +1,206 @@
 """
-MustanAgent v3.3 PRO - VoiceService
-Tek instance (singleton), kuyruklu TTS, platform-aware engine,
-pyttsx3 → edge-tts fallback, thread-safe STT.
+MustanAgent v3.3 PRO - Voice Service
+Gürültü önleme, sessizlik/halüsinasyon filtresi ve pyttsx3/edge-tts destekli ses motoru.
 """
 
 from __future__ import annotations
 
 import logging
-import platform
-import queue
+import re
 import threading
-import time
-from typing import Optional
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger("mustan_agent.services.voice")
 
+# Singleton örneği
+_voice_instance: Optional[VoiceService] = None
+
+
+def get_voice_service(language: str = "tr-TR", tts_enabled: bool = True) -> VoiceService:
+    """VoiceService için Singleton erişim fonksiyonu."""
+    global _voice_instance
+    if _voice_instance is None:
+        _voice_instance = VoiceService(language=language, tts_enabled=tts_enabled)
+    return _voice_instance
+
+
+# Sessizlikte STT motorlarının sıklıkla ürettiği halüsinasyon kelimeleri
+HALLUCINATION_PATTERNS = [
+    r"^teşekkür(?:ler)?\.?$",
+    r"^izlediğiniz için teşekkürler\.?$",
+    r"^altyazı\.?$",
+    r"^subtitles?\.?$",
+    r"^mbc\.?$",
+    r"^bye\.?$",
+    r"^\.$",
+]
+
 
 class VoiceService:
-    _instance: Optional["VoiceService"] = None
-    _lock = threading.Lock()
-
-    def __new__(cls, *args, **kwargs):
-        with cls._lock:
-            if cls._instance is None:
-                cls._instance = super().__new__(cls)
-            return cls._instance
-
-    def __init__(
-        self,
-        language: str = "tr-TR",
-        tts_enabled: bool = True,
-        prefer_edge: bool = False,
-        rate: int = 175,
-        volume: float = 0.9,
-    ):
-        if getattr(self, "_initialized", False):
-            return
-
+    def __init__(self, language: str = "tr-TR", tts_enabled: bool = True):
         self.language = language
         self.tts_enabled = tts_enabled
-        self.prefer_edge = prefer_edge
-        self.rate = rate
-        self.volume = max(0.0, min(1.0, volume))
+        self.tts_engine_name = "yok"
+        self._lock = threading.Lock()
 
-        self._tts_queue: queue.Queue[Optional[str]] = queue.Queue()
-        self._worker: Optional[threading.Thread] = None
-        self._engine = None
-        self._engine_ok = False
-        self._use_edge = False
-        self._stop_event = threading.Event()
-
-        self._recognizer = None
-        self._mic = None
-        self._stt_ok = False
-
-        if self.tts_enabled:
-            self._init_tts()
-            self._start_worker()
-
+        # STT Hazırlığı
+        self.recognizer = None
+        self.microphone = None
         self._init_stt()
-        self._initialized = True
-        logger.info(
-            "VoiceService hazır | TTS=%s | STT=%s | edge=%s",
-            self._engine_ok or self._use_edge,
-            self._stt_ok,
-            self._use_edge,
-        )
 
-    def _init_tts(self) -> None:
-        if self.prefer_edge:
-            if self._try_edge_import():
-                self._use_edge = True
-                logger.info("TTS: edge-tts tercih edildi")
-                return
-
-        try:
-            import pyttsx3
-
-            system = platform.system().lower()
-            if system == "windows":
-                self._engine = pyttsx3.init(driverName="sapi5")
-            elif system == "darwin":
-                self._engine = pyttsx3.init(driverName="nsss")
-            else:
-                try:
-                    self._engine = pyttsx3.init(driverName="espeak")
-                except Exception:
-                    self._engine = pyttsx3.init()
-
-            self._engine.setProperty("rate", self.rate)
-            self._engine.setProperty("volume", self.volume)
-
-            try:
-                voices = self._engine.getProperty("voices") or []
-                for v in voices:
-                    name = (getattr(v, "name", "") or "").lower()
-                    lang = str(getattr(v, "languages", [])).lower()
-                    if "turkish" in name or "tr" in lang or "türk" in name:
-                        self._engine.setProperty("voice", v.id)
-                        logger.info("Türkçe ses seçildi: %s", v.name)
-                        break
-            except Exception:
-                pass
-
-            self._engine_ok = True
-            logger.info("TTS: pyttsx3 engine hazır (%s)", platform.system())
-        except Exception as e:
-            logger.warning("pyttsx3 başlatılamadı: %s", e)
-            self._engine = None
-            self._engine_ok = False
-            if self._try_edge_import():
-                self._use_edge = True
-                logger.info("TTS: edge-tts fallback aktif")
-
-    def _try_edge_import(self) -> bool:
-        try:
-            import edge_tts  # noqa: F401
-            import asyncio  # noqa: F401
-            return True
-        except ImportError:
-            return False
-
-    def _start_worker(self) -> None:
-        if self._worker and self._worker.is_alive():
-            return
-        self._stop_event.clear()
-        self._worker = threading.Thread(
-            target=self._tts_worker,
-            name="MustanTTSWorker",
-            daemon=True,
-        )
-        self._worker.start()
-
-    def _tts_worker(self) -> None:
-        while not self._stop_event.is_set():
-            try:
-                text = self._tts_queue.get(timeout=0.5)
-            except queue.Empty:
-                continue
-            if text is None:
-                break
-            try:
-                if self._use_edge:
-                    self._speak_edge(text)
-                elif self._engine_ok and self._engine is not None:
-                    self._engine.say(text)
-                    self._engine.runAndWait()
-                else:
-                    logger.debug("TTS atlandı (engine yok): %s", text[:60])
-            except Exception as e:
-                logger.error("TTS worker hatası: %s", e)
-                if not self._use_edge:
-                    try:
-                        self._init_tts()
-                    except Exception:
-                        pass
-            finally:
-                self._tts_queue.task_done()
-
-    def _speak_edge(self, text: str) -> None:
-        import asyncio
-        import tempfile
-        import os
-
-        async def _gen():
-            import edge_tts
-            voice = (
-                "tr-TR-AhmetNeural"
-                if self.language.startswith("tr")
-                else "en-US-ChristopherNeural"
-            )
-            communicate = edge_tts.Communicate(text, voice)
-            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
-                tmp = f.name
-            await communicate.save(tmp)
-            return tmp
-
-        try:
-            loop = asyncio.new_event_loop()
-            tmp_path = loop.run_until_complete(_gen())
-            loop.close()
-
-            try:
-                from playsound import playsound
-                playsound(tmp_path)
-            except Exception:
-                try:
-                    import pygame
-                    pygame.mixer.init()
-                    pygame.mixer.music.load(tmp_path)
-                    pygame.mixer.music.play()
-                    while pygame.mixer.music.get_busy():
-                        time.sleep(0.05)
-                except Exception as e:
-                    logger.error("edge-tts çalma hatası: %s", e)
-            finally:
-                try:
-                    os.unlink(tmp_path)
-                except Exception:
-                    pass
-        except Exception as e:
-            logger.error("edge-tts üretim hatası: %s", e)
-
-    def speak(self, text: str) -> None:
-        if not self.tts_enabled or not text or not text.strip():
-            return
-        if not (self._engine_ok or self._use_edge):
-            logger.debug("TTS devre dışı: %s", text[:40])
-            return
-        self._tts_queue.put(text.strip())
-
-    def speak_and_wait(self, text: str, timeout: float = 30.0) -> None:
-        if not text:
-            return
-        self.speak(text)
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            if self._tts_queue.unfinished_tasks == 0:
-                break
-            time.sleep(0.05)
-
-    def set_enabled(self, enabled: bool) -> None:
-        self.tts_enabled = enabled
+        # TTS Hazırlığı
+        self.engine = None
+        self._init_tts()
 
     def _init_stt(self) -> None:
         try:
             import speech_recognition as sr
-            self._recognizer = sr.Recognizer()
-            self._recognizer.dynamic_energy_threshold = True
-            self._recognizer.pause_threshold = 0.8
-            self._mic = sr.Microphone()
-            self._stt_ok = True
-            logger.info("STT: speech_recognition + Microphone hazır")
+            self.recognizer = sr.Recognizer()
+            # Gürültü ve sessizlik hassasiyet ayarları
+            self.recognizer.energy_threshold = 300  # Minimum ses enerjisi eşiği
+            self.recognizer.dynamic_energy_threshold = True  # Dinamik gürültü adaptasyonu
+            self.recognizer.pause_threshold = 1.0  # Duraksama süresi (saniye)
+            self.microphone = sr.Microphone()
+            logger.info("STT (speech_recognition) başarıyla başlatıldı.")
         except Exception as e:
-            logger.warning("STT başlatılamadı: %s", e)
-            self._stt_ok = False
+            logger.warning("STT motoru başlatılamadı: %s", e)
+
+    def _init_tts(self) -> None:
+        try:
+            import pyttsx3
+            self.engine = pyttsx3.init()
+            self.engine.setProperty("rate", 175)  # Konuşma hızı
+            self.engine.setProperty("volume", 1.0)  # Ses seviyesi %100
+
+            # Türkçe ses var mı kontrol et
+            voices = self.engine.getProperty("voices")
+            for v in voices:
+                if "turkish" in v.name.lower() or "tr" in v.id.lower():
+                    self.engine.setProperty("voice", v.id)
+                    break
+
+            self.tts_engine_name = "pyttsx3"
+            logger.info("TTS (pyttsx3) başarıyla başlatıldı.")
+        except Exception as e:
+            logger.warning("pyttsx3 başlatılamadı, alternatif deneniyor: %s", e)
+            try:
+                import edge_tts
+                self.tts_engine_name = "edge-tts"
+            except ImportError:
+                self.tts_engine_name = "yok"
+
+    def set_enabled(self, enabled: bool) -> None:
+        self.tts_enabled = enabled
+
+    def status(self) -> Dict[str, Any]:
+        return {
+            "tts_enabled": self.tts_enabled,
+            "tts_engine": self.tts_engine_name,
+            "tts_available": self.tts_engine_name != "yok",
+            "stt_available": self.recognizer is not None,
+            "stt_ok": self.recognizer is not None and self.microphone is not None,
+            "language": self.language,
+        }
+
+    def _is_hallucination(self, text: str) -> bool:
+        """Sessizlikte oluşan STT halüsinasyonlarını temizler."""
+        clean_text = text.strip().lower()
+        if len(clean_text) < 2:
+            return True
+
+        for pattern in HALLUCINATION_PATTERNS:
+            if re.match(pattern, clean_text, re.IGNORECASE):
+                return True
+        return False
 
     def listen_and_transcribe(
         self,
         timeout: float = 5.0,
         phrase_time_limit: float = 12.0,
-        adjust_noise: bool = True,
     ) -> Optional[str]:
-        if not self._stt_ok or self._recognizer is None or self._mic is None:
-            logger.warning("STT kullanılamıyor")
+        """Mikrofondan sesi dinler, gürültüyü filtreler ve metne dönüştürür."""
+        if not self.recognizer or not self.microphone:
+            logger.error("STT bileşenleri hazır değil.")
             return None
 
         import speech_recognition as sr
 
         try:
-            with self._mic as source:
-                if adjust_noise:
-                    self._recognizer.adjust_for_ambient_noise(source, duration=0.6)
-                print("🎤 Dinleniyor...")
-                audio = self._recognizer.listen(
+            with self.microphone as source:
+                # Ortam gürültüsünü otomatik kalibre et (0.6 sn)
+                self.recognizer.adjust_for_ambient_noise(source, duration=0.6)
+                logger.debug("Dinleniyor...")
+                audio = self.recognizer.listen(
                     source,
                     timeout=timeout,
                     phrase_time_limit=phrase_time_limit,
                 )
 
-            try:
-                text = self._recognizer.recognize_google(
-                    audio, language=self.language
-                )
-                logger.info("STT: %s", text)
-                return text.strip()
-            except sr.UnknownValueError:
-                print("[~] Anlaşılamadı, tekrar deneyin.")
+            # Google STT ile dönüştür
+            text = self.recognizer.recognize_google(audio, language=self.language)
+            text = text.strip()
+
+            # Sessizlik halüsinasyonu kontrolü
+            if self._is_hallucination(text):
+                logger.debug("STT Gürültü/Halüsinasyon engellendi: '%s'", text)
                 return None
-            except sr.RequestError as e:
-                logger.error("Google STT isteği başarısız: %s", e)
-                print("[-] Ses tanıma servisine ulaşılamadı.")
-                return None
+
+            return text
+
         except sr.WaitTimeoutError:
-            print("[~] Süre doldu, ses algılanmadı.")
+            return None
+        except sr.UnknownValueError:
             return None
         except Exception as e:
-            logger.error("STT hatası: %s", e)
+            logger.error("STT Dinleme hatası: %s", e)
             return None
 
-    def status(self) -> dict:
-        return {
-            "tts_enabled": self.tts_enabled,
-            "tts_engine": (
-                "edge-tts" if self._use_edge
-                else ("pyttsx3" if self._engine_ok else "yok")
-            ),
-            "stt_ok": self._stt_ok,
-            "language": self.language,
-            "queue_size": self._tts_queue.qsize(),
-        }
+    def speak(self, text: str) -> None:
+        """Metni sesli olarak okur."""
+        if not self.tts_enabled or not text:
+            return
 
-    def shutdown(self) -> None:
-        self._stop_event.set()
-        self._tts_queue.put(None)
-        if self._worker and self._worker.is_alive():
-            self._worker.join(timeout=2.0)
-        logger.info("VoiceService kapatıldı")
+        with self._lock:
+            try:
+                if self.tts_engine_name == "pyttsx3" and self.engine:
+                    self.engine.say(text)
+                    self.engine.runAndWait()
+                elif self.tts_engine_name == "edge-tts":
+                    self._speak_edge_tts(text)
+                else:
+                    logger.warning("Aktif TTS motoru yok. Metin: %s", text)
+            except Exception as e:
+                logger.exception("TTS seslendirme hatası: %s", e)
 
+    def _speak_edge_tts(self, text: str) -> None:
+        """Yedek online TTS motoru (edge-tts)."""
+        import asyncio
+        import os
+        import tempfile
 
-def get_voice_service(**kwargs) -> VoiceService:
-    return VoiceService(**kwargs)
+        async def _generate():
+            import edge_tts
+            communicate = edge_tts.Communicate(text, "tr-TR-AhmetNeural")
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
+                tmp_path = fp.name
+            await communicate.save(tmp_path)
+            return tmp_path
+
+        try:
+            mp3_path = asyncio.run(_generate())
+            try:
+                from playsound import playsound
+                playsound(mp3_path)
+            except Exception:
+                if os.name == "nt":
+                    os.system(f'start /min "" "{mp3_path}"')
+                else:
+                    os.system(f'afplay "{mp3_path}" || aplay "{mp3_path}"')
+            finally:
+                if os.path.exists(mp3_path):
+                    try:
+                        os.remove(mp3_path)
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.error("Edge TTS hatası: %s", e)

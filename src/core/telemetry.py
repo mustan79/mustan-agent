@@ -60,9 +60,10 @@ class TelemetryStore:
         memory_dir: str = "Aimemory",
         max_memory_events: int = 500,
     ):
-        if getattr(self, "_initialized", False):
+        requested_dir = Path(memory_dir)
+        if getattr(self, "_initialized", False) and self.memory_dir == requested_dir:
             return
-        self.memory_dir = Path(memory_dir)
+        self.memory_dir = requested_dir
         self.memory_dir.mkdir(parents=True, exist_ok=True)
         self.telemetry_dir = self.memory_dir / "telemetry"
         self.telemetry_dir.mkdir(exist_ok=True)

@@ -11,11 +11,11 @@ from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger("mustan_agent.commands.status_summary")
+from core.config import settings
 
 
 def _memory_dir() -> str:
     try:
-        from core.config import settings
         return settings.config.memory.base_dir or "Aimemory"
     except Exception:
         return "Aimemory"
@@ -26,14 +26,11 @@ def _cwd_info() -> str:
 
 
 def run_status() -> bool:
-    print("=" * 50)
-    print("  MustanAgent — Sistem Durumu")
-    print("=" * 50)
+    print(" 📡 MustanAgent v3.3 PRO - Sistem Durumu")
     print(f"  OS / cwd     : {os.name} | {_cwd_info()}")
 
     # Provider / model
     try:
-        from core.config import settings
         llm = settings.config.llm
         print(f"  Provider     : {llm.provider}")
         print(f"  Model        : {llm.model}")
@@ -119,7 +116,7 @@ def run_telemetry_report(memory_dir: Optional[str] = None) -> bool:
     print("\nCaller bazli:")
     for caller, v in (s.get("by_caller") or {}).items():
         print(
-            f"  {caller}: {v.get('calls', 0)}x | "
+	            f"  {caller}: {v.get('calls', 0)}x | "
             f"{v.get('tokens', 0)} tok | ${v.get('cost_usd', 0):.4f} | "
             f"fail={v.get('fail', 0)}"
         )
